@@ -1,0 +1,131 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterable
+
+from dotenv import load_dotenv
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(REPO_ROOT / ".env")
+
+
+@dataclass(frozen=True)
+class ManagerConfig:
+    name: str
+    cik: str
+
+
+@dataclass(frozen=True)
+class AppConfig:
+    sec_user_agent: str
+    sec_rate_limit_per_sec: float
+    db_path: Path
+    managers: list[ManagerConfig]
+    notifiers: list[str]
+    telegram_bot_token: str | None
+    telegram_chat_id: str | None
+    smtp_host: str | None
+    smtp_port: int
+    smtp_user: str | None
+    smtp_pass: str | None
+    email_from: str | None
+    email_to: str | None
+    notify_initial: bool
+
+
+def _split_csv(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _default_managers_file() -> Path:
+    return REPO_ROOT / "config" / "managers.json"
+
+
+def _load_managers_from_iterable(items: Iterable[dict]) -> list[ManagerConfig]:
+    managers: list[ManagerConfig] = []
+    for item in items:
+        name = (item.get("name") or "").strip()
+        cik = (item.get("cik") or "").strip()
+        if not name or not cik:
+            raise ValueError("Each manager must include non-empty 'name' and 'cik'.")
+        managers.append(ManagerConfig(name=name, cik=cik))
+    return managers
+
+
+def load_managers(managers_file: Path | None, managers_json: str | None) -> list[ManagerConfig]:
+    if managers_json:
+        data = json.loads(managers_json)
+        if not isinstance(data, list):
+            raise ValueError("MANAGERS_JSON must be a JSON array.")
+        return _load_managers_from_iterable(data)
+
+    file_path = managers_file or _default_managers_file()
+    if not file_path.exists():
+        raise FileNotFoundError(f"Managers file not found: {file_path}")
+
+    data = json.loads(file_path.read_text())
+    if not isinstance(data, list):
+        raise ValueError("Managers file must contain a JSON array.")
+    return _load_managers_from_iterable(data)
+
+
+def load_config(
+    *,
+    db_path: str | None = None,
+    managers_file: str | None = None,
+    notifiers: str | None = None,
+    notify_initial: bool = False,
+) -> AppConfig:
+    sec_user_agent = os.environ.get("SEC_USER_AGENT", "").strip()
+    if not sec_user_agent:
+        raise ValueError("SEC_USER_AGENT is required (descriptive user agent with contact email).")
+
+    rate_limit_raw = os.environ.get("SEC_RATE_LIMIT_PER_SEC", "5").strip()
+    try:
+        sec_rate_limit_per_sec = float(rate_limit_raw)
+    except ValueError as exc:
+        raise ValueError("SEC_RATE_LIMIT_PER_SEC must be a number.") from exc
+    if sec_rate_limit_per_sec <= 0 or sec_rate_limit_per_sec > 10:
+        raise ValueError("SEC_RATE_LIMIT_PER_SEC must be > 0 and <= 10.")
+
+    resolved_db_path = Path(db_path or os.environ.get("DB_PATH", "") or (REPO_ROOT / "data" / "tracker.sqlite3"))
+    managers_path = Path(managers_file) if managers_file else (
+        Path(os.environ.get("MANAGERS_FILE")) if os.environ.get("MANAGERS_FILE") else None
+    )
+    managers_json = os.environ.get("MANAGERS_JSON")
+
+    managers = load_managers(managers_path, managers_json)
+
+    notifiers_list = _split_csv(notifiers or os.environ.get("NOTIFIERS"))
+
+    telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    smtp_host = os.environ.get("SMTP_HOST")
+    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
+    smtp_user = os.environ.get("SMTP_USER")
+    smtp_pass = os.environ.get("SMTP_PASS")
+    email_from = os.environ.get("EMAIL_FROM")
+    email_to = os.environ.get("EMAIL_TO")
+
+    return AppConfig(
+        sec_user_agent=sec_user_agent,
+        sec_rate_limit_per_sec=sec_rate_limit_per_sec,
+        db_path=resolved_db_path,
+        managers=managers,
+        notifiers=notifiers_list,
+        telegram_bot_token=telegram_bot_token,
+        telegram_chat_id=telegram_chat_id,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_pass=smtp_pass,
+        email_from=email_from,
+        email_to=email_to,
+        notify_initial=notify_initial,
+    )
