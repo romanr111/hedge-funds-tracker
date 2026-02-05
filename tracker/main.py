@@ -14,46 +14,12 @@ from tracker.storage import StateStore
 TARGET_FORMS = {"13F-HR", "13F-HR/A"}
 
 
-def _format_human_filing_time(
-    filing_date: str | None, acceptance_datetime: str | None
-) -> str | None:
-    def _human_datetime(dt: datetime) -> str:
-        month_day = dt.strftime("%d").lstrip("0") or "0"
-        hour = dt.strftime("%I").lstrip("0") or "0"
-        return f"{dt.strftime('%B')} {month_day}, {dt.strftime('%Y')} at {hour}:{dt.strftime('%M:%S %p')} UTC"
-
-    if acceptance_datetime:
-        normalized = acceptance_datetime.strip()
-        # SEC often sends acceptanceDateTime as YYYYMMDDHHMMSS.
-        formats = [
-            "%Y%m%d%H%M%S",
-            "%Y-%m-%dT%H:%M:%S.%fZ",
-            "%Y-%m-%dT%H:%M:%SZ",
-        ]
-        for fmt in formats:
-            try:
-                parsed = datetime.strptime(normalized, fmt).replace(tzinfo=timezone.utc)
-                return _human_datetime(parsed)
-            except ValueError:
-                continue
-
-    if filing_date:
-        try:
-            parsed_date = datetime.strptime(filing_date, "%Y-%m-%d")
-            return parsed_date.strftime("%B %-d, %Y (date only)")
-        except ValueError:
-            return filing_date
-
-    return None
-
-
 def _extract_filings(submissions: dict) -> list[dict]:
     recent = submissions.get("filings", {}).get("recent", {})
     accessions = recent.get("accessionNumber", [])
     forms = recent.get("form", [])
     filing_dates = recent.get("filingDate", [])
     report_dates = recent.get("reportDate", [])
-    acceptance_datetimes = recent.get("acceptanceDateTime", [])
 
     count = min(len(accessions), len(forms), len(filing_dates), len(report_dates))
     filings = []
@@ -66,9 +32,6 @@ def _extract_filings(submissions: dict) -> list[dict]:
                 "form": forms[idx],
                 "filing_date": filing_dates[idx],
                 "report_date": report_dates[idx],
-                "acceptance_datetime": acceptance_datetimes[idx]
-                if idx < len(acceptance_datetimes)
-                else None,
             }
         )
 
@@ -164,9 +127,6 @@ def process_manager(manager, store, client, notifiers, *, notify_initial: bool, 
                 last_accession=filing["accession"],
                 last_filing_date=filing["filing_date"],
                 last_report_date=filing["report_date"],
-                last_filing_time_human=_format_human_filing_time(
-                    filing["filing_date"], filing.get("acceptance_datetime")
-                ),
                 last_positions=positions,
             )
         previous_positions = positions
