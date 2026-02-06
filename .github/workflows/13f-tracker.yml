@@ -1,0 +1,74 @@
+name: 13F Tracker
+
+on:
+  workflow_dispatch:
+  schedule:
+    # Daily at 13:15 UTC.
+    - cron: "15 13 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: 13f-tracker
+  cancel-in-progress: false
+
+jobs:
+  run-tracker:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate required configuration
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+        run: |
+          if [ -z "$SEC_USER_AGENT" ]; then
+            echo "Missing required secret: SEC_USER_AGENT"
+            exit 1
+          fi
+
+      - name: Run tracker
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
+          MANAGERS_FILE: config/managers.json
+          DB_PATH: data/tracker.sqlite3
+          NOTIFIERS: ${{ vars.NOTIFIERS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ vars.SMTP_PORT || '587' }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+        run: |
+          mkdir -p data
+          python -m tracker
+
+      - name: Commit state file if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f data/tracker.sqlite3
+          if git diff --staged --quiet; then
+            echo "No state changes to commit."
+            exit 0
+          fi
+          git commit -m "chore: update tracker state [skip ci]"
+          git push

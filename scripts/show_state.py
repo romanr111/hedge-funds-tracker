@@ -64,7 +64,9 @@ def main() -> int:
 
     table_rows: list[list[str]] = []
     for row in rows:
-        positions = json.loads(row["last_positions_json"]) if row["last_positions_json"] else []
+        positions = (
+            json.loads(row["last_positions_json"]) if row["last_positions_json"] else []
+        )
         table_rows.append(
             [
                 row["cik"] or "",
@@ -76,12 +78,21 @@ def main() -> int:
             ]
         )
 
-    headers = ["cik", "name", "last_accession", "last_filing_date", "positions", "updated_at"]
+    headers = [
+        "cik",
+        "name",
+        "last_accession",
+        "last_filing_date",
+        "positions",
+        "updated_at",
+    ]
     print(_format_table(headers, table_rows))
     print()
     print("Details:")
     for row in rows:
-        positions = json.loads(row["last_positions_json"]) if row["last_positions_json"] else []
+        positions = (
+            json.loads(row["last_positions_json"]) if row["last_positions_json"] else []
+        )
         print("-" * 60)
         print(f"cik: {row['cik']}")
         print(f"name: {row['name']}")
