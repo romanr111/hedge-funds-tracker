@@ -63,6 +63,7 @@ jobs:
 
       - name: Commit state file if changed
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f data/tracker.sqlite3
@@ -71,4 +72,19 @@ jobs:
             exit 0
           fi
           git commit -m "chore: update tracker state [skip ci]"
-          git push
+          target_branch="${GITHUB_REF_NAME:-main}"
+          for attempt in 1 2 3; do
+            if git push origin "HEAD:${target_branch}"; then
+              echo "Pushed state update to ${target_branch}."
+              exit 0
+            fi
+            echo "Push failed on attempt ${attempt}. Rebasing onto origin/${target_branch}..."
+            git fetch origin "${target_branch}"
+            if ! git rebase "origin/${target_branch}"; then
+              git rebase --abort || true
+              echo "Rebase conflict while updating tracker state."
+              exit 1
+            fi
+          done
+          echo "Failed to push state update after retries."
+          exit 1

@@ -27,6 +27,7 @@ class StateStore:
         self._initialize()
 
     def _initialize(self) -> None:
+        self._recover_interrupted_migration()
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS manager_state (
@@ -43,12 +44,31 @@ class StateStore:
         self._migrate_schema()
         self._conn.commit()
 
+    def _table_exists(self, table_name: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    def _recover_interrupted_migration(self) -> None:
+        has_main = self._table_exists("manager_state")
+        has_new = self._table_exists("manager_state_new")
+
+        if has_new and not has_main:
+            # Previous migration likely crashed after creating/copying into temp table.
+            self._conn.execute("ALTER TABLE manager_state_new RENAME TO manager_state")
+        elif has_new and has_main:
+            # Stale temp table from interrupted migration; keep canonical table only.
+            self._conn.execute("DROP TABLE manager_state_new")
+
     def _migrate_schema(self) -> None:
         columns = {
             row["name"]
             for row in self._conn.execute("PRAGMA table_info(manager_state)").fetchall()
         }
         if "last_filing_time_human" in columns:
+            self._conn.execute("DROP TABLE IF EXISTS manager_state_new")
             self._conn.execute(
                 """
                 CREATE TABLE manager_state_new (
