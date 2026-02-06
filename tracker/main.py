@@ -160,7 +160,9 @@ def main() -> int:
     if not config.notifiers:
         print("No notifiers configured. Running without notifications.")
 
-    if config.notifiers:
+    if args.dry_run and not args.test_notification:
+        notifiers = []
+    elif config.notifiers:
         notifiers = build_notifiers(
             config.notifiers,
             telegram_bot_token=config.telegram_bot_token,
@@ -173,9 +175,6 @@ def main() -> int:
             email_to=config.email_to,
         )
     else:
-        notifiers = []
-
-    if args.dry_run and not args.test_notification:
         notifiers = []
 
     if args.test_notification:
