@@ -12,6 +12,8 @@ import requests
 
 SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_ARCHIVES_BASE = "https://www.sec.gov/Archives/edgar/data/"
+INFO_TABLE_ROOT_RE = re.compile(r"<\s*(?:\w+:)?informationtable\b", flags=re.IGNORECASE)
+INFO_TABLE_ENTRY_RE = re.compile(r"<\s*(?:\w+:)?infotable\b", flags=re.IGNORECASE)
 
 
 def normalize_cik(cik: str) -> str:
@@ -107,32 +109,47 @@ class SecClient:
         accession_dir = accession_no_dashes(accession)
         base_url = urljoin(EDGAR_ARCHIVES_BASE, f"{cik_dir(cik)}/{accession_dir}/")
 
+        def looks_like_information_table_xml(text: str) -> bool:
+            return bool(INFO_TABLE_ROOT_RE.search(text) and INFO_TABLE_ENTRY_RE.search(text))
+
+        def candidate_rank(name: str) -> tuple[int, str]:
+            lowered = name.lower()
+            if "infotable" in lowered or "informationtable" in lowered:
+                return (0, lowered)
+            if "primary_doc" in lowered:
+                return (2, lowered)
+            return (1, lowered)
+
+        def find_valid_candidate(candidate_names: list[str]) -> str | None:
+            for name in sorted(candidate_names, key=candidate_rank):
+                candidate_url = urljoin(base_url, name)
+                try:
+                    text = self.get_text(candidate_url)
+                except requests.HTTPError:
+                    continue
+                if looks_like_information_table_xml(text):
+                    return candidate_url
+            return None
+
         try:
             entries = self.get_filing_index(cik, accession)
-            candidates = []
-            for entry in entries:
-                name_lower = entry.name.lower()
-                type_lower = (entry.type or "").lower()
-                if not name_lower.endswith(".xml"):
-                    continue
-                if "information table" in type_lower or "infotable" in name_lower or "informationtable" in name_lower:
-                    candidates.append(entry.name)
-            if not candidates:
-                # Fallback: any XML with "info" in the filename
-                candidates = [entry.name for entry in entries if entry.name.lower().endswith(".xml") and "info" in entry.name.lower()]
-            if candidates:
-                return urljoin(base_url, candidates[0])
-        except requests.HTTPError:
+            xml_names = [entry.name for entry in entries if entry.name.lower().endswith(".xml")]
+            if xml_names:
+                candidate_url = find_valid_candidate(xml_names)
+                if candidate_url:
+                    return candidate_url
+        except requests.RequestException:
             pass
 
         index_html_url = urljoin(base_url, f"{accession}-index.html")
         html = self.get_text(index_html_url)
-        match = re.search(r'href="([^"]+?info[^"]+?\.xml)"', html, flags=re.IGNORECASE)
-        if match:
-            return urljoin(base_url, match.group(1))
-
-        match = re.search(r'href="([^"]+?\.xml)"', html, flags=re.IGNORECASE)
-        if match:
-            return urljoin(base_url, match.group(1))
+        info_matches = re.findall(r'href="([^"]*?info[^"]*?\.xml)"', html, flags=re.IGNORECASE)
+        xml_matches = re.findall(r'href="([^"]+?\.xml)"', html, flags=re.IGNORECASE)
+        # Keep discovery order while de-duplicating.
+        candidates = list(dict.fromkeys(info_matches + xml_matches))
+        if candidates:
+            candidate_url = find_valid_candidate(candidates)
+            if candidate_url:
+                return candidate_url
 
         raise ValueError(f"Could not locate information table XML for accession {accession}.")
