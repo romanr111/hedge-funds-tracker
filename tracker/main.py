@@ -41,9 +41,7 @@ def _extract_filings(submissions: dict) -> list[dict]:
     return filings
 
 
-def _format_subject(manager_name: str, filing_date: str | None) -> str:
-    if filing_date:
-        return f"{manager_name} 13F update ({filing_date})"
+def _format_subject(manager_name: str) -> str:
     return f"{manager_name} 13F update"
 
 
@@ -63,6 +61,14 @@ def _parse_iso_date(value: str | None) -> date | None:
         return datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError:
         return None
+
+
+def _format_report_period(value: str | None) -> str:
+    report_day = _parse_iso_date(value)
+    if report_day is None:
+        return "Unknown period"
+    quarter = ((report_day.month - 1) // 3) + 1
+    return f"Q{quarter} {report_day.year}"
 
 
 def _filter_by_filing_age(filings: list[dict], max_filing_age_days: int) -> list[dict]:
@@ -128,10 +134,11 @@ def process_manager(manager, store, client, notifiers, *, notify_initial: bool, 
 
         if not previous_positions:
             if notify_initial:
-                subject = _format_subject(manager.name, filing["filing_date"])
+                subject = _format_subject(manager.name)
                 body = (
                     f"Baseline stored for {manager.name} ({manager.cik}).\n"
-                    f"Accession {filing['accession']} filed {filing['filing_date']}."
+                    f"Period: {_format_report_period(filing['report_date'])}\n"
+                    f"Filed {filing['filing_date']}."
                 )
                 if not dry_run:
                     _send_notifications(notifiers, subject, body)
@@ -147,11 +154,12 @@ def process_manager(manager, store, client, notifiers, *, notify_initial: bool, 
                     diff.decreased_positions,
                 ]
             ):
-                subject = _format_subject(manager.name, filing["filing_date"])
+                subject = _format_subject(manager.name)
                 summary = build_diff_message(diff)
                 body = (
-                    f"Accession {filing['accession']} filed {filing['filing_date']}.\n"
-                    f"Report date {filing['report_date']}.\n\n"
+                    f"Period: {_format_report_period(filing['report_date'])}\n"
+                    f"Filed {filing['filing_date']}.\n"
+                    "\n"
                     f"{summary}"
                 )
                 if not dry_run:
