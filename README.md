@@ -93,3 +93,8 @@ Note:
 ```bash
 python -m tracker --help
 ```
+
+Test notification only (without SEC polling):
+```bash
+python -m tracker --test-notification
+```
