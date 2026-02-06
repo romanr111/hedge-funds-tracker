@@ -3,8 +3,8 @@ name: 13F Tracker
 on:
   workflow_dispatch:
   schedule:
-    # Daily at 13:15 UTC.
-    - cron: "15 13 * * *"
+    # Every 15 minutes (UTC).
+    - cron: "*/15 * * * *"
 
 permissions:
   contents: write
@@ -36,10 +36,24 @@ jobs:
       - name: Validate required configuration
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          NOTIFIERS: ${{ vars.NOTIFIERS || 'telegram' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          set -euo pipefail
           if [ -z "$SEC_USER_AGENT" ]; then
             echo "Missing required secret: SEC_USER_AGENT"
             exit 1
+          fi
+          if [[ ",$NOTIFIERS," == *,telegram,* ]]; then
+            if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+              echo "Missing required secret for telegram notifier: TELEGRAM_BOT_TOKEN"
+              exit 1
+            fi
+            if [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+              echo "Missing required secret for telegram notifier: TELEGRAM_CHAT_ID"
+              exit 1
+            fi
           fi
 
       - name: Run tracker
@@ -48,7 +62,7 @@ jobs:
           SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
           MANAGERS_FILE: config/managers.json
           DB_PATH: data/tracker.sqlite3
-          NOTIFIERS: ${{ vars.NOTIFIERS }}
+          NOTIFIERS: ${{ vars.NOTIFIERS || 'telegram' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
