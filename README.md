@@ -68,20 +68,22 @@ Example daily run at 7am:
 ```
 
 ## GitHub Actions
-This repo includes `/Users/roman/Documents/Development/hedge_funds_tracker/.github/workflows/13f-tracker.yml` to run daily and on manual trigger.
+This repo includes `/Users/roman/Documents/Development/hedge_funds_tracker/.github/workflows/13f-tracker.yml` to run every 15 minutes and on manual trigger.
 
 Setup steps:
 1. Push this repository to GitHub.
 2. In GitHub repo settings, ensure Actions are enabled.
 3. Add repository secret `SEC_USER_AGENT` with a descriptive value like:
    `HedgeFundsTracker/1.0 (you@example.com)`
-4. Optional repository variables/secrets:
+4. Required Telegram setup for notifications:
+   - Secret `TELEGRAM_BOT_TOKEN`
+   - Secret `TELEGRAM_CHAT_ID`
+5. Optional repository variables/secrets:
    - Variable `SEC_RATE_LIMIT_PER_SEC` (default `5`)
-   - Variable `NOTIFIERS` (`telegram`, `email`, or `telegram,email`)
-   - Telegram secrets: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
+   - Variable `NOTIFIERS` (`telegram`, `email`, or `telegram,email`, default is `telegram`)
    - Email secrets: `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO`
    - Optional variable `SMTP_PORT` (default `587`)
-5. Run once from Actions tab using `workflow_dispatch` to create baseline state.
+6. Run once from Actions tab using `workflow_dispatch` to create baseline state.
 
 Note:
 - Workflow commits `data/tracker.sqlite3` back to the repository to persist state between runs.
