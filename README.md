@@ -89,7 +89,29 @@ Note:
 - Workflow commits `data/tracker.sqlite3` back to the repository to persist state between runs.
 - Commit message includes `[skip ci]` to avoid loops.
 
-## CLI flags
+## CLI commands
+Main tracker:
+```bash
+python -m tracker
+```
+
+Available tracker flags:
 ```bash
 python -m tracker --help
+python -m tracker --db-path data/tracker.sqlite3
+python -m tracker --managers-file config/managers.json
+python -m tracker --notifiers telegram,email
+python -m tracker --notify-initial
+python -m tracker --dry-run
+python -m tracker --test-notification
+```
+
+Notes:
+- `--test-notification` sends a notification immediately and exits (without SEC polling).
+- `--test-notification` cannot be combined with `--dry-run`.
+
+State viewer utility:
+```bash
+python scripts/show_state.py
+python scripts/show_state.py --db data/tracker.sqlite3
 ```

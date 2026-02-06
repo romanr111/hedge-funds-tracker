@@ -138,8 +138,17 @@ def main() -> int:
     parser.add_argument("--managers-file", help="Path to managers.json")
     parser.add_argument("--notifiers", help="Comma-separated list (telegram,email)")
     parser.add_argument("--notify-initial", action="store_true", help="Notify on initial baseline set")
+    parser.add_argument(
+        "--test-notification",
+        action="store_true",
+        help="Send a test notification and exit (without SEC checks).",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Do not send notifications or write state")
     args = parser.parse_args()
+
+    if args.test_notification and args.dry_run:
+        print("Cannot combine --test-notification with --dry-run.")
+        return 2
 
     config = load_config(
         db_path=args.db_path,
@@ -151,10 +160,7 @@ def main() -> int:
     if not config.notifiers:
         print("No notifiers configured. Running without notifications.")
 
-    min_interval = 1.0 / config.sec_rate_limit_per_sec
-    client = SecClient(user_agent=config.sec_user_agent, min_interval_seconds=min_interval)
-    store = StateStore(config.db_path)
-    if args.dry_run:
+    if args.dry_run and not args.test_notification:
         notifiers = []
     elif config.notifiers:
         notifiers = build_notifiers(
@@ -170,6 +176,20 @@ def main() -> int:
         )
     else:
         notifiers = []
+
+    if args.test_notification:
+        if not notifiers:
+            print("No notifiers configured for test notification.")
+            return 1
+        subject = "13F Tracker test notification"
+        body = f"Test notification sent at {datetime.now(timezone.utc).isoformat()}."
+        _send_notifications(notifiers, subject, body)
+        print("Test notification sent.")
+        return 0
+
+    min_interval = 1.0 / config.sec_rate_limit_per_sec
+    client = SecClient(user_agent=config.sec_user_agent, min_interval_seconds=min_interval)
+    store = StateStore(config.db_path)
 
     for manager in config.managers:
         process_manager(
