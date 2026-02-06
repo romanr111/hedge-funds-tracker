@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from tracker.config import load_config
 from tracker.diff import build_diff_message, diff_positions
@@ -12,6 +13,7 @@ from tracker.storage import StateStore
 
 
 TARGET_FORMS = {"13F-HR", "13F-HR/A"}
+KYIV_TZ = ZoneInfo("Europe/Kyiv")
 
 
 def _extract_filings(submissions: dict) -> list[dict]:
@@ -45,12 +47,41 @@ def _format_subject(manager_name: str, filing_date: str | None) -> str:
     return f"{manager_name} 13F update"
 
 
+def _now_kyiv() -> datetime:
+    return datetime.now(KYIV_TZ)
+
+
+def _format_local_datetime(value: datetime) -> str:
+    # Intentionally hide timezone suffix in user-facing messages.
+    return value.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _parse_iso_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _filter_by_filing_age(filings: list[dict], max_filing_age_days: int) -> list[dict]:
+    cutoff = _now_kyiv().date() - timedelta(days=max_filing_age_days)
+    filtered: list[dict] = []
+    for filing in filings:
+        filing_day = _parse_iso_date(filing.get("filing_date"))
+        # Keep unknown dates rather than potentially dropping a valid new filing.
+        if filing_day is None or filing_day >= cutoff:
+            filtered.append(filing)
+    return filtered
+
+
 def _send_notifications(notifiers, subject: str, body: str) -> None:
     for notifier in notifiers:
         notifier.send(subject, body)
 
 
-def process_manager(manager, store, client, notifiers, *, notify_initial: bool, dry_run: bool) -> None:
+def process_manager(manager, store, client, notifiers, *, notify_initial: bool, dry_run: bool, max_filing_age_days: int) -> None:
     print(f"Checking {manager.name} ({manager.cik})...")
     try:
         submissions = client.get_submissions(manager.cik)
@@ -61,15 +92,23 @@ def process_manager(manager, store, client, notifiers, *, notify_initial: bool, 
     if not filings:
         print("  No 13F filings found.")
         return
+    filings = _filter_by_filing_age(filings, max_filing_age_days)
+    if not filings:
+        print(f"  No recent 13F filings in the last {max_filing_age_days} days.")
+        return
 
     state = store.get_state(manager.cik)
     last_accession = state.last_accession if state else None
     new_filings = []
 
-    for filing in filings:
-        if last_accession and filing["accession"] == last_accession:
-            break
-        new_filings.append(filing)
+    if state is None:
+        # Initial run: seed baseline from the latest filing only, avoid historical backfill spam.
+        new_filings = filings[:1]
+    else:
+        for filing in filings:
+            if last_accession and filing["accession"] == last_accession:
+                break
+            new_filings.append(filing)
 
     if not new_filings:
         print("  No new filings.")
@@ -134,10 +173,7 @@ def process_manager(manager, store, client, notifiers, *, notify_initial: bool, 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Track 13F filings and send notifications.")
-    parser.add_argument("--db-path", help="Path to SQLite DB")
-    parser.add_argument("--managers-file", help="Path to managers.json")
-    parser.add_argument("--notifiers", help="Comma-separated list (telegram,email)")
-    parser.add_argument("--notify-initial", action="store_true", help="Notify on initial baseline set")
+    parser.add_argument("--notify_on_first_start", action="store_true", help="Notify on initial baseline set")
     parser.add_argument(
         "--test-notification",
         action="store_true",
@@ -150,12 +186,7 @@ def main() -> int:
         print("Cannot combine --test-notification with --dry-run.")
         return 2
 
-    config = load_config(
-        db_path=args.db_path,
-        managers_file=args.managers_file,
-        notifiers=args.notifiers,
-        notify_initial=args.notify_initial,
-    )
+    config = load_config(notify_initial=args.notify_on_first_start)
 
     if not config.notifiers:
         print("No notifiers configured. Running without notifications.")
@@ -182,7 +213,7 @@ def main() -> int:
             print("No notifiers configured for test notification.")
             return 1
         subject = "13F Tracker test notification"
-        body = f"Test notification sent at {datetime.now(timezone.utc).isoformat()}."
+        body = f"Test notification sent at {_format_local_datetime(_now_kyiv())}."
         _send_notifications(notifiers, subject, body)
         print("Test notification sent.")
         return 0
@@ -199,10 +230,11 @@ def main() -> int:
             notifiers,
             notify_initial=config.notify_initial,
             dry_run=args.dry_run,
+            max_filing_age_days=config.max_filing_age_days,
         )
 
     store.close()
-    print(f"Done at {datetime.now(timezone.utc).isoformat()}.")
+    print(f"Done at {_format_local_datetime(_now_kyiv())}.")
     return 0
 
 

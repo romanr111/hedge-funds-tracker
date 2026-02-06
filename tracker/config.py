@@ -2,15 +2,52 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is missing.
+    load_dotenv = None
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-load_dotenv(REPO_ROOT / ".env")
+
+
+def _load_dotenv_fallback(path: Path) -> None:
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if not key:
+            continue
+
+        try:
+            # Matches common .env quote handling without pulling extra deps.
+            parsed = shlex.split(value, posix=True)
+            normalized_value = parsed[0] if parsed else ""
+        except ValueError:
+            normalized_value = value.strip("\"'")
+        os.environ.setdefault(key, normalized_value)
+
+
+if load_dotenv is not None:
+    load_dotenv(REPO_ROOT / ".env")
+else:
+    _load_dotenv_fallback(REPO_ROOT / ".env")
 
 
 @dataclass(frozen=True)
@@ -23,6 +60,7 @@ class ManagerConfig:
 class AppConfig:
     sec_user_agent: str
     sec_rate_limit_per_sec: float
+    max_filing_age_days: int
     db_path: Path
     managers: list[ManagerConfig]
     notifiers: list[str]
@@ -80,6 +118,7 @@ def load_config(
     db_path: str | None = None,
     managers_file: str | None = None,
     notifiers: str | None = None,
+    max_filing_age_days: int | None = None,
     notify_initial: bool = False,
 ) -> AppConfig:
     sec_user_agent = os.environ.get("SEC_USER_AGENT", "").strip()
@@ -93,6 +132,18 @@ def load_config(
         raise ValueError("SEC_RATE_LIMIT_PER_SEC must be a number.") from exc
     if sec_rate_limit_per_sec <= 0 or sec_rate_limit_per_sec > 10:
         raise ValueError("SEC_RATE_LIMIT_PER_SEC must be > 0 and <= 10.")
+
+    max_age_raw = (
+        str(max_filing_age_days)
+        if max_filing_age_days is not None
+        else os.environ.get("MAX_FILING_AGE_DAYS", "180").strip()
+    )
+    try:
+        resolved_max_filing_age_days = int(max_age_raw)
+    except ValueError as exc:
+        raise ValueError("MAX_FILING_AGE_DAYS must be an integer.") from exc
+    if resolved_max_filing_age_days < 0:
+        raise ValueError("MAX_FILING_AGE_DAYS must be >= 0.")
 
     resolved_db_path = Path(db_path or os.environ.get("DB_PATH", "") or (REPO_ROOT / "data" / "tracker.sqlite3"))
     managers_path = Path(managers_file) if managers_file else (
@@ -116,6 +167,7 @@ def load_config(
     return AppConfig(
         sec_user_agent=sec_user_agent,
         sec_rate_limit_per_sec=sec_rate_limit_per_sec,
+        max_filing_age_days=resolved_max_filing_age_days,
         db_path=resolved_db_path,
         managers=managers,
         notifiers=notifiers_list,

@@ -35,6 +35,7 @@ Optional:
 - `DB_PATH` (SQLite path, default `data/tracker.sqlite3`)
 - `NOTIFIERS` (comma-separated, e.g. `telegram,email`)
 - `SEC_RATE_LIMIT_PER_SEC` (requests/sec, must be <= 10; default 5)
+- `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
 
 Paths in `.env` may be relative to the repo root.
 
@@ -58,8 +59,10 @@ Email:
 ```
 
 ## Behavior Notes
-- The first time a manager is seen, a baseline snapshot is stored. Use `--notify-initial` to send a baseline notification.
-- The tracker only notifies when it detects position changes (new, exited, increased, decreased).
+- The tracker ignores filings older than `MAX_FILING_AGE_DAYS` (default 180 days).
+- The first time a manager is seen, only the most recent eligible filing is used to seed baseline state.
+- Use `--notify_on_first_start` to send a single baseline notification on that initial seed.
+- After baseline exists, the tracker notifies only when it detects position changes (new, exited, increased, decreased).
 
 ## Scheduling (cron)
 Example daily run at 7am:
@@ -68,7 +71,7 @@ Example daily run at 7am:
 ```
 
 ## GitHub Actions
-This repo includes `/Users/roman/Documents/Development/hedge_funds_tracker/.github/workflows/13f-tracker.yml` to run every 15 minutes and on manual trigger.
+This repo includes `/Users/roman/Documents/Development/hedge_funds_tracker/.github/workflows/13f-tracker.yml` to run daily at 07:00 Europe/Kyiv and on manual trigger.
 
 Setup steps:
 1. Push this repository to GitHub.
@@ -80,6 +83,7 @@ Setup steps:
    - Secret `TELEGRAM_CHAT_ID`
 5. Optional repository variables/secrets:
    - Variable `SEC_RATE_LIMIT_PER_SEC` (default `5`)
+   - Variable `MAX_FILING_AGE_DAYS` (default `180`)
    - Variable `NOTIFIERS` (`telegram`, `email`, or `telegram,email`, default is `telegram`)
    - Email secrets: `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO`
    - Optional variable `SMTP_PORT` (default `587`)
@@ -95,20 +99,26 @@ Main tracker:
 python -m tracker
 ```
 
-Available tracker flags:
+Common command examples:
 ```bash
 python -m tracker --help
-python -m tracker --db-path data/tracker.sqlite3
-python -m tracker --managers-file config/managers.json
-python -m tracker --notifiers telegram,email
-python -m tracker --notify-initial
+python -m tracker --notify_on_first_start
 python -m tracker --dry-run
 python -m tracker --test-notification
 ```
 
-Notes:
-- `--test-notification` sends a notification immediately and exits (without SEC polling).
-- `--test-notification` cannot be combined with `--dry-run`.
+Flag reference:
+- `--help`
+  Prints CLI help and exits without running SEC checks.
+- `--notify_on_first_start`
+  On first run for a manager (no state yet), sends one baseline notification for the latest eligible filing.
+  Without this flag, initial baseline is still stored but notification is suppressed.
+- `--dry-run`
+  Executes SEC polling and diff logic, NO notifications, no DB writing.
+  Useful for safe validation and troubleshooting.
+- `--test-notification`
+  Sends a test notification immediately through configured notifiers and exits.
+  Does not poll SEC and cannot be combined with `--dry-run`.
 
 State viewer utility:
 ```bash
