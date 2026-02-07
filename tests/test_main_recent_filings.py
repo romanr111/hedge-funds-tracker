@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from tracker import config as _config  # noqa: F401  # loads .env into os.environ for integration notifier check
+import pytest
+
+from tracker import config as _config  # noqa: F401  # loads .env into os.environ for optional integration check
+from tracker.domain.models import ManagerState, Position
 from tracker.main import _filter_by_filing_age, _format_local_datetime, process_manager
 from tracker.notifiers import build_notifiers
-from tracker.storage import ManagerState
 
 
 def _iso_days_ago(days_ago: int) -> str:
@@ -47,18 +50,74 @@ class _Store:
     def __init__(self) -> None:
         self.writes: list[str] = []
 
-    def get_state(self, cik: str):
+    def get_state(self, cik: str) -> ManagerState | None:
+        del cik
         return None
 
-    def upsert_state(self, **kwargs) -> None:
-        self.writes.append(kwargs["last_accession"])
+    def upsert_state(
+        self,
+        *,
+        cik: str,
+        name: str,
+        last_accession: str | None,
+        last_filing_date: str | None,
+        last_report_date: str | None,
+        last_positions: list[Position] | None,
+    ) -> None:
+        del cik, name, last_filing_date, last_report_date, last_positions
+        self.writes.append(last_accession or "")
+
+    def close(self) -> None:
+        return None
+
+
+class _StoreWithExistingState:
+    def __init__(self, state: ManagerState) -> None:
+        self._state = state
+        self.writes: list[dict[str, Any]] = []
+
+    def get_state(self, cik: str) -> ManagerState | None:
+        del cik
+        return self._state
+
+    def upsert_state(
+        self,
+        *,
+        cik: str,
+        name: str,
+        last_accession: str | None,
+        last_filing_date: str | None,
+        last_report_date: str | None,
+        last_positions: list[Position] | None,
+    ) -> None:
+        payload: dict[str, Any] = {
+            "cik": cik,
+            "name": name,
+            "last_accession": last_accession,
+            "last_filing_date": last_filing_date,
+            "last_report_date": last_report_date,
+            "last_positions": last_positions,
+        }
+        self.writes.append(payload)
+        self._state = ManagerState(
+            cik=cik,
+            name=name,
+            last_accession=last_accession,
+            last_filing_date=last_filing_date,
+            last_report_date=last_report_date,
+            last_positions=last_positions,
+        )
+
+    def close(self) -> None:
+        return None
 
 
 class _Client:
     def __init__(self) -> None:
         self.accessions: list[str] = []
 
-    def get_submissions(self, cik: str):
+    def get_submissions(self, cik: str) -> dict[str, Any]:
+        del cik
         return {
             "filings": {
                 "recent": {
@@ -71,39 +130,13 @@ class _Client:
         }
 
     def find_information_table_url(self, cik: str, accession: str) -> str:
+        del cik
         self.accessions.append(accession)
         return f"https://example.invalid/{accession}.xml"
 
     def get_text(self, url: str) -> str:
+        del url
         return "<xml />"
-
-
-class _StoreWithExistingState:
-    def __init__(self, state: ManagerState) -> None:
-        self._state = state
-        self.writes: list[dict] = []
-
-    def get_state(self, cik: str):
-        return self._state
-
-    def upsert_state(self, **kwargs) -> None:
-        self.writes.append(kwargs)
-        self._state = ManagerState(
-            cik=kwargs["cik"],
-            name=kwargs["name"],
-            last_accession=kwargs["last_accession"],
-            last_filing_date=kwargs["last_filing_date"],
-            last_report_date=kwargs["last_report_date"],
-            last_positions=kwargs["last_positions"],
-        )
-
-
-class _CapturingNotifier:
-    def __init__(self) -> None:
-        self.messages: list[tuple[str, str]] = []
-
-    def send(self, subject: str, body: str) -> None:
-        self.messages.append((subject, body))
 
 
 class _ClientWithNewFiling:
@@ -123,7 +156,8 @@ class _ClientWithNewFiling:
         self._new_report_xml = new_report_xml
         self.accessions: list[str] = []
 
-    def get_submissions(self, cik: str):
+    def get_submissions(self, cik: str) -> dict[str, Any]:
+        del cik
         return {
             "filings": {
                 "recent": {
@@ -136,6 +170,7 @@ class _ClientWithNewFiling:
         }
 
     def find_information_table_url(self, cik: str, accession: str) -> str:
+        del cik
         self.accessions.append(accession)
         return f"https://example.invalid/{accession}.xml"
 
@@ -145,8 +180,16 @@ class _ClientWithNewFiling:
         raise AssertionError(f"Unexpected URL: {url}")
 
 
-def _fake_information_table_xml(positions: list[dict]) -> str:
-    blocks = []
+class _CapturingNotifier:
+    def __init__(self) -> None:
+        self.messages: list[tuple[str, str]] = []
+
+    def send(self, subject: str, body: str) -> None:
+        self.messages.append((subject, body))
+
+
+def _fake_information_table_xml(positions: list[dict[str, Any]]) -> str:
+    blocks: list[str] = []
     for position in positions:
         blocks.append(
             (
@@ -165,12 +208,15 @@ def _fake_information_table_xml(positions: list[dict]) -> str:
     return f"<informationTable>{''.join(blocks)}</informationTable>"
 
 
-def test_initial_run_uses_only_latest_filing(monkeypatch) -> None:
+def test_initial_run_uses_only_latest_filing(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = _Manager(name="Test Fund", cik="0000000000")
     store = _Store()
     client = _Client()
 
-    monkeypatch.setattr("tracker.main.parse_infotable", lambda _: [{"cusip": "x"}])
+    def _fake_parse(_: str) -> list[Position]:
+        return [{"cusip": "x"}]
+
+    monkeypatch.setattr("tracker.main.parse_infotable", _fake_parse)
 
     process_manager(
         manager,
@@ -193,7 +239,7 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     known_filing_date = _iso_days_ago(30)
     known_report_date = _iso_days_ago(120)
 
-    previous_positions = [
+    previous_positions: list[Position] = [
         {
             "name": "Alpha Corp",
             "title": "COM",
@@ -238,10 +284,16 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
         new_report_xml=new_report_xml,
     )
     notifier = _CapturingNotifier()
+
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    require_real_telegram = os.environ.get("REQUIRE_REAL_TELEGRAM_TEST") == "1"
+
     notifiers = [notifier]
-    if telegram_token and telegram_chat_id:
+    if require_real_telegram:
+        assert telegram_token and telegram_chat_id, (
+            "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to run with real Telegram delivery."
+        )
         real_notifier = build_notifiers(
             ["telegram"],
             telegram_bot_token=telegram_token,
@@ -254,11 +306,6 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
             email_to=None,
         )[0]
         notifiers = [real_notifier, notifier]
-
-    if os.environ.get("REQUIRE_REAL_TELEGRAM_TEST") == "1":
-        assert telegram_token and telegram_chat_id, (
-            "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to run with real Telegram delivery."
-        )
 
     process_manager(
         manager,
@@ -288,4 +335,4 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     assert saved["last_accession"] == "new-report"
     assert saved["last_filing_date"] == new_filing_date
     assert saved["last_report_date"] == new_report_date
-    assert {position["cusip"] for position in saved["last_positions"]} == {"000000001", "000000002"}
+    assert {position.get("cusip") for position in (saved["last_positions"] or [])} == {"000000001", "000000002"}

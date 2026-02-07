@@ -5,12 +5,15 @@ import os
 import shlex
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
+load_dotenv: Callable[..., bool] | None
 try:
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv as _load_dotenv
 except ModuleNotFoundError:  # pragma: no cover - exercised only when dependency is missing.
     load_dotenv = None
+else:
+    load_dotenv = _load_dotenv
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -85,11 +88,13 @@ def _default_managers_file() -> Path:
     return REPO_ROOT / "config" / "managers.json"
 
 
-def _load_managers_from_iterable(items: Iterable[dict]) -> list[ManagerConfig]:
+def _load_managers_from_iterable(items: Iterable[dict[str, object]]) -> list[ManagerConfig]:
     managers: list[ManagerConfig] = []
     for item in items:
-        name = (item.get("name") or "").strip()
-        cik = (item.get("cik") or "").strip()
+        raw_name = item.get("name")
+        raw_cik = item.get("cik")
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
+        cik = raw_cik.strip() if isinstance(raw_cik, str) else ""
         if not name or not cik:
             raise ValueError("Each manager must include non-empty 'name' and 'cik'.")
         managers.append(ManagerConfig(name=name, cik=cik))
@@ -146,9 +151,8 @@ def load_config(
         raise ValueError("MAX_FILING_AGE_DAYS must be >= 0.")
 
     resolved_db_path = Path(db_path or os.environ.get("DB_PATH", "") or (REPO_ROOT / "data" / "tracker.sqlite3"))
-    managers_path = Path(managers_file) if managers_file else (
-        Path(os.environ.get("MANAGERS_FILE")) if os.environ.get("MANAGERS_FILE") else None
-    )
+    managers_file_env = os.environ.get("MANAGERS_FILE")
+    managers_path = Path(managers_file) if managers_file else (Path(managers_file_env) if managers_file_env else None)
     managers_json = os.environ.get("MANAGERS_JSON")
 
     managers = load_managers(managers_path, managers_json)
