@@ -9,11 +9,13 @@ from tracker.application.ports.sec_gateway import SecGateway
 from tracker.application.ports.state_repository import StateRepository
 from tracker.domain.diffing import build_diff_message, diff_positions
 from tracker.domain.exceptions import InformationTableLookupError, InvalidInformationTableError, SubmissionsFetchError
-from tracker.domain.filings import extract_filings, filter_by_filing_age
+from tracker.domain.filings import extract_filings, filter_by_filing_age, is_filing_within_hours
 from tracker.domain.formatting import format_report_period, format_subject
 from tracker.domain.models import Manager, Position
 from tracker.domain.parsing import parse_infotable
 from tracker.domain.timing import now_kyiv
+
+RECENT_NO_CHANGE_NOTIFICATION_HOURS = 24
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -147,6 +149,15 @@ def process_manager(
                         "accession": filing.accession,
                     },
                 )
+                if is_filing_within_hours(filing, now=now_fn(), hours=RECENT_NO_CHANGE_NOTIFICATION_HOURS):
+                    subject = format_subject(manager.name)
+                    body = (
+                        f"📅 Period: {format_report_period(filing.report_date)}\n"
+                        f"Filed {filing.filing_date}.\n\n"
+                        "No position changes detected in this filing."
+                    )
+                    if not dry_run:
+                        _send_notifications(notifiers, subject, body)
 
         if not dry_run:
             store.upsert_state(

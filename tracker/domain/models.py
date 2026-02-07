@@ -19,6 +19,7 @@ class Filing:
     form: str
     filing_date: str | None
     report_date: str | None
+    acceptance_datetime: str | None = None
 
 
 @dataclass(frozen=True)
