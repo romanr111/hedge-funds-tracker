@@ -4,7 +4,7 @@ from datetime import datetime
 
 
 def format_subject(manager_name: str) -> str:
-    return f"{manager_name} 13F update"
+    return f"🔥 {manager_name} 13F update"
 
 
 def format_report_period(report_date: str | None) -> str:

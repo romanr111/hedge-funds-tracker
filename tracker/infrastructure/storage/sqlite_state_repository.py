@@ -157,6 +157,14 @@ class StateStore:
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise StateStoreError(f"Failed to upsert state for CIK {cik}: {exc}") from exc
 
+    def clear_state(self) -> int:
+        try:
+            cursor = self._conn.execute("DELETE FROM manager_state")
+            self._conn.commit()
+            return cursor.rowcount
+        except sqlite3.Error as exc:
+            raise StateStoreError(f"Failed to clear state store at {self._db_path}: {exc}") from exc
+
     def close(self) -> None:
         try:
             self._conn.close()

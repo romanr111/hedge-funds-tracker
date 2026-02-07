@@ -92,7 +92,7 @@ def process_manager(
                 subject = format_subject(manager.name)
                 body = (
                     f"Baseline stored for {manager.name} ({manager.cik}).\n"
-                    f"Period: {format_report_period(filing.report_date)}\n"
+                    f"📅 Period: {format_report_period(filing.report_date)}\n"
                     f"Filed {filing.filing_date}."
                 )
                 if not dry_run:
@@ -132,7 +132,7 @@ def process_manager(
                 subject = format_subject(manager.name)
                 summary = build_diff_message(diff)
                 body = (
-                    f"Period: {format_report_period(filing.report_date)}\n"
+                    f"📅 Period: {format_report_period(filing.report_date)}\n"
                     f"Filed {filing.filing_date}.\n\n"
                     f"{summary}"
                 )

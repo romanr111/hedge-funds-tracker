@@ -32,6 +32,12 @@ def _main(logger: logging.Logger) -> int:
     parser = argparse.ArgumentParser(description="Track 13F filings and send notifications.")
     parser.add_argument("--notify_on_first_start", action="store_true", help="Notify on initial baseline set")
     parser.add_argument(
+        "clean_state",
+        nargs="?",
+        choices=["clean_state"],
+        help="Clear persisted manager state before running checks.",
+    )
+    parser.add_argument(
         "--test-notification",
         action="store_true",
         help="Send a test notification and exit (without SEC checks).",
@@ -41,6 +47,12 @@ def _main(logger: logging.Logger) -> int:
 
     if args.test_notification and args.dry_run:
         logger.error("Cannot combine --test-notification with --dry-run")
+        return 2
+    if args.test_notification and args.clean_state == "clean_state":
+        logger.error("Cannot combine --test-notification with clean_state")
+        return 2
+    if args.dry_run and args.clean_state == "clean_state":
+        logger.error("Cannot combine --dry-run with clean_state")
         return 2
 
     try:
@@ -57,6 +69,7 @@ def _main(logger: logging.Logger) -> int:
             "managers_count": len(config.managers),
             "dry_run": args.dry_run,
             "test_notification": args.test_notification,
+            "clean_state": args.clean_state == "clean_state",
         },
     )
 
@@ -80,6 +93,10 @@ def _main(logger: logging.Logger) -> int:
     except (ValueError, StateStoreError) as exc:
         logger.error("Runtime initialization failed", extra={"error": str(exc)})
         return 1
+
+    if args.clean_state == "clean_state":
+        cleared_rows = runtime.store.clear_state()
+        logger.info("State store cleared before run", extra={"rows_deleted": cleared_rows})
 
     for manager_config in config.managers:
         process_manager(

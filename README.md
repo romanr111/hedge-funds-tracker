@@ -93,6 +93,7 @@ Common command examples:
 ```bash
 python -m tracker --help
 python -m tracker --notify_on_first_start
+python -m tracker --notify_on_first_start clean_state
 python -m tracker --dry-run
 python -m tracker --test-notification
 ```
@@ -103,12 +104,16 @@ Flag reference:
 - `--notify_on_first_start`
   On first run for a manager (no state yet), sends one baseline notification for the latest eligible filing.
   Without this flag, initial baseline is still stored but notification is suppressed.
+- `clean_state`
+  Positional command to clear all rows from `manager_state` before running SEC checks.
+  Example: `python -m tracker --notify_on_first_start clean_state`
 - `--dry-run`
   Executes SEC polling and diff logic, NO notifications, no DB writing.
   Useful for safe validation and troubleshooting.
+  Cannot be combined with `clean_state`.
 - `--test-notification`
   Sends a test notification immediately through configured notifiers and exits.
-  Does not poll SEC and cannot be combined with `--dry-run`.
+  Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
 
 State viewer utility:
 ```bash

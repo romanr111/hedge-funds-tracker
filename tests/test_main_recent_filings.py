@@ -315,7 +315,7 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     assert len(notifier.messages) == 1
 
     subject, body = notifier.messages[0]
-    assert subject == "Test Fund 13F update"
+    assert subject == "🔥 Test Fund 13F update"
     assert f"Period: {_quarter_label(new_report_date)}" in body
     assert f"Filed {new_filing_date}." in body
     assert "Accession" not in body
