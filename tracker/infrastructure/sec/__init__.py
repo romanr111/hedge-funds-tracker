@@ -1,4 +1,4 @@
-from tracker.infrastructure.sec.sec_http_gateway import (
+from .sec_http_gateway import (
     EDGAR_ARCHIVES_BASE,
     INFO_TABLE_ENTRY_RE,
     INFO_TABLE_ROOT_RE,
