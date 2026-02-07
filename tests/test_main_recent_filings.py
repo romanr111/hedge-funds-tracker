@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from zoneinfo import ZoneInfo
 
+import pytest
+
+from tracker.domain.models import ManagerState, Position
 from tracker.main import _filter_by_filing_age, _format_local_datetime, process_manager
 
 
@@ -37,18 +41,32 @@ class _Store:
     def __init__(self) -> None:
         self.writes: list[str] = []
 
-    def get_state(self, cik: str):
+    def get_state(self, cik: str) -> ManagerState | None:
         return None
 
-    def upsert_state(self, **kwargs) -> None:
-        self.writes.append(kwargs["last_accession"])
+    def upsert_state(
+        self,
+        *,
+        cik: str,
+        name: str,
+        last_accession: str | None,
+        last_filing_date: str | None,
+        last_report_date: str | None,
+        last_positions: list[Position] | None,
+    ) -> None:
+        del cik, name, last_filing_date, last_report_date, last_positions
+        self.writes.append(last_accession or "")
+
+    def close(self) -> None:
+        return None
 
 
 class _Client:
     def __init__(self) -> None:
         self.accessions: list[str] = []
 
-    def get_submissions(self, cik: str):
+    def get_submissions(self, cik: str) -> dict[str, Any]:
+        del cik
         return {
             "filings": {
                 "recent": {
@@ -68,12 +86,15 @@ class _Client:
         return "<xml />"
 
 
-def test_initial_run_uses_only_latest_filing(monkeypatch) -> None:
+def test_initial_run_uses_only_latest_filing(monkeypatch: pytest.MonkeyPatch) -> None:
     manager = _Manager(name="Test Fund", cik="0000000000")
     store = _Store()
     client = _Client()
 
-    monkeypatch.setattr("tracker.main.parse_infotable", lambda _: [{"cusip": "x"}])
+    def _fake_parse(_: str) -> list[Position]:
+        return [{"cusip": "x"}]
+
+    monkeypatch.setattr("tracker.main.parse_infotable", _fake_parse)
 
     process_manager(
         manager,

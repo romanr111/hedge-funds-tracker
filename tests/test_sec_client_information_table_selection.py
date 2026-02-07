@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import requests
+import pytest
 
+from tracker.domain.exceptions import InformationTableLookupError
 from tracker.sec_client import FilingIndexEntry, SecClient
 
 
-def test_find_information_table_skips_primary_doc_html(monkeypatch) -> None:
+def test_find_information_table_skips_primary_doc_html(monkeypatch: pytest.MonkeyPatch) -> None:
     client = SecClient(user_agent="test-agent")
 
     monkeypatch.setattr(
@@ -31,11 +32,12 @@ def test_find_information_table_skips_primary_doc_html(monkeypatch) -> None:
     assert url.endswith("/46994.xml")
 
 
-def test_find_information_table_from_index_html_validates_xml(monkeypatch) -> None:
+def test_find_information_table_from_index_html_validates_xml(monkeypatch: pytest.MonkeyPatch) -> None:
     client = SecClient(user_agent="test-agent")
 
-    def fake_get_filing_index(cik: str, accession: str):
-        raise requests.HTTPError("index.json unavailable")
+    def fake_get_filing_index(cik: str, accession: str) -> list[FilingIndexEntry]:
+        del cik, accession
+        raise InformationTableLookupError("index.json unavailable")
 
     def fake_get_text(url: str) -> str:
         if url.endswith("-index.html"):
