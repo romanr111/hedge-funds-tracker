@@ -32,6 +32,7 @@ class StateStore:
                 last_filing_date TEXT,
                 last_report_date TEXT,
                 last_positions_json TEXT,
+                last_notified_accession TEXT,
                 updated_at TEXT NOT NULL
             )
             """
@@ -73,6 +74,7 @@ class StateStore:
                     last_filing_date TEXT,
                     last_report_date TEXT,
                     last_positions_json TEXT,
+                    last_notified_accession TEXT,
                     updated_at TEXT NOT NULL
                 )
                 """
@@ -80,10 +82,10 @@ class StateStore:
             self._conn.execute(
                 """
                 INSERT INTO manager_state_new (
-                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, updated_at
+                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, last_notified_accession, updated_at
                 )
                 SELECT
-                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, updated_at
+                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, NULL, updated_at
                 FROM manager_state
                 """
             )
@@ -92,6 +94,13 @@ class StateStore:
             self._conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_manager_state_last_filing_date ON manager_state(last_filing_date)"
             )
+            columns = {
+                row["name"]
+                for row in self._conn.execute("PRAGMA table_info(manager_state)").fetchall()
+            }
+
+        if "last_notified_accession" not in columns:
+            self._conn.execute("ALTER TABLE manager_state ADD COLUMN last_notified_accession TEXT")
 
     def get_state(self, cik: str) -> ManagerState | None:
         try:
@@ -113,6 +122,7 @@ class StateStore:
                 last_filing_date=row["last_filing_date"],
                 last_report_date=row["last_report_date"],
                 last_positions=last_positions,
+                last_notified_accession=row["last_notified_accession"],
             )
         except (sqlite3.Error, json.JSONDecodeError) as exc:
             raise StateStoreError(f"Failed to read state for CIK {cik}: {exc}") from exc
@@ -126,6 +136,7 @@ class StateStore:
         last_filing_date: str | None,
         last_report_date: str | None,
         last_positions: list[Position] | None,
+        last_notified_accession: str | None,
     ) -> None:
         try:
             updated_at = datetime.now(timezone.utc).isoformat()
@@ -133,14 +144,15 @@ class StateStore:
             self._conn.execute(
                 """
                 INSERT INTO manager_state (
-                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    cik, name, last_accession, last_filing_date, last_report_date, last_positions_json, last_notified_accession, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(cik) DO UPDATE SET
                     name = excluded.name,
                     last_accession = excluded.last_accession,
                     last_filing_date = excluded.last_filing_date,
                     last_report_date = excluded.last_report_date,
                     last_positions_json = excluded.last_positions_json,
+                    last_notified_accession = excluded.last_notified_accession,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -150,6 +162,7 @@ class StateStore:
                     last_filing_date,
                     last_report_date,
                     last_positions_json,
+                    last_notified_accession,
                     updated_at,
                 ),
             )

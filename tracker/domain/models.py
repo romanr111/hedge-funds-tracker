@@ -30,6 +30,7 @@ class ManagerState:
     last_filing_date: str | None
     last_report_date: str | None
     last_positions: list[Position] | None
+    last_notified_accession: str | None = None
 
 
 @dataclass(frozen=True)
