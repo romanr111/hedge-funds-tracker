@@ -6,7 +6,7 @@ from collections.abc import Sequence
 
 from tracker.application.use_cases.track_manager import process_manager
 from tracker.application.ports.notifier import NotifierPort
-from tracker.composition import build_runtime
+from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
 from tracker.domain.exceptions import StateStoreError
 from tracker.domain.models import Manager
@@ -60,21 +60,26 @@ def _main(logger: logging.Logger) -> int:
         },
     )
 
+    if args.test_notification:
+        try:
+            notifiers = build_notifier_list(config, dry_run=args.dry_run, test_notification=True)
+        except ValueError as exc:
+            logger.error("Notifier initialization failed", extra={"error": str(exc)})
+            return 1
+        if not notifiers:
+            logger.error("No notifiers configured for test notification")
+            return 1
+        subject = "13F Tracker test notification"
+        body = f"Test notification sent at {format_local_datetime(now_kyiv())}."
+        _send_notifications(notifiers, subject, body)
+        logger.info("Test notification sent")
+        return 0
+
     try:
         runtime = build_runtime(config, dry_run=args.dry_run, test_notification=args.test_notification)
     except (ValueError, StateStoreError) as exc:
         logger.error("Runtime initialization failed", extra={"error": str(exc)})
         return 1
-
-    if args.test_notification:
-        if not runtime.notifiers:
-            logger.error("No notifiers configured for test notification")
-            return 1
-        subject = "13F Tracker test notification"
-        body = f"Test notification sent at {format_local_datetime(now_kyiv())}."
-        _send_notifications(runtime.notifiers, subject, body)
-        logger.info("Test notification sent")
-        return 0
 
     for manager_config in config.managers:
         process_manager(

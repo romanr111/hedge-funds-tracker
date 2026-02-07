@@ -15,24 +15,26 @@ class Runtime:
     notifiers: list[Notifier]
 
 
-def build_runtime(config: AppConfig, *, dry_run: bool, test_notification: bool) -> Runtime:
+def build_notifier_list(config: AppConfig, *, dry_run: bool, test_notification: bool) -> list[Notifier]:
     if dry_run and not test_notification:
-        notifiers: list[Notifier] = []
-    elif config.notifiers:
-        notifiers = build_notifiers(
-            config.notifiers,
-            telegram_bot_token=config.telegram_bot_token,
-            telegram_chat_id=config.telegram_chat_id,
-            smtp_host=config.smtp_host,
-            smtp_port=config.smtp_port,
-            smtp_user=config.smtp_user,
-            smtp_pass=config.smtp_pass,
-            email_from=config.email_from,
-            email_to=config.email_to,
-        )
-    else:
-        notifiers = []
+        return []
+    if not config.notifiers:
+        return []
+    return build_notifiers(
+        config.notifiers,
+        telegram_bot_token=config.telegram_bot_token,
+        telegram_chat_id=config.telegram_chat_id,
+        smtp_host=config.smtp_host,
+        smtp_port=config.smtp_port,
+        smtp_user=config.smtp_user,
+        smtp_pass=config.smtp_pass,
+        email_from=config.email_from,
+        email_to=config.email_to,
+    )
 
+
+def build_runtime(config: AppConfig, *, dry_run: bool, test_notification: bool) -> Runtime:
+    notifiers = build_notifier_list(config, dry_run=dry_run, test_notification=test_notification)
     min_interval = 1.0 / config.sec_rate_limit_per_sec
     client = SecClient(user_agent=config.sec_user_agent, min_interval_seconds=min_interval)
     store = StateStore(config.db_path)
