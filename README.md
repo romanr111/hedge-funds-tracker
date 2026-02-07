@@ -38,6 +38,7 @@ Optional:
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
 
 Paths in `.env` may be relative to the repo root.
+For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
 
 Telegram:
 - `TELEGRAM_BOT_TOKEN`

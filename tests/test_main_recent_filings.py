@@ -232,6 +232,34 @@ def test_initial_run_uses_only_latest_filing(monkeypatch: pytest.MonkeyPatch) ->
     assert store.writes == ["newest"]
 
 
+def test_initial_run_notification_has_spacing_and_no_filed_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    manager = _Manager(name="Test Fund", cik="0000000000")
+    store = _Store()
+    client = _Client()
+    notifier = _CapturingNotifier()
+
+    def _fake_parse(_: str) -> list[Position]:
+        return [{"cusip": "x"}]
+
+    monkeypatch.setattr("tracker.main.parse_infotable", _fake_parse)
+
+    process_manager(
+        manager,
+        store,
+        client,
+        notifiers=[notifier],
+        notify_initial=True,
+        dry_run=False,
+        max_filing_age_days=180,
+    )
+
+    assert len(notifier.messages) == 1
+    _, body = notifier.messages[0]
+    assert f"Baseline stored for {manager.name} ({manager.cik}).\n\n" in body
+    assert "📅 Period:" in body
+    assert "Filed " not in body
+
+
 def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     manager = _Manager(name="Test Fund", cik="0000000000")
     new_filing_date = _iso_days_ago(4)

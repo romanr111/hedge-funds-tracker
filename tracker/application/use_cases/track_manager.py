@@ -91,9 +91,8 @@ def process_manager(
             if notify_initial:
                 subject = format_subject(manager.name)
                 body = (
-                    f"Baseline stored for {manager.name} ({manager.cik}).\n"
-                    f"📅 Period: {format_report_period(filing.report_date)}\n"
-                    f"Filed {filing.filing_date}."
+                    f"Baseline stored for {manager.name} ({manager.cik}).\n\n"
+                    f"📅 Period: {format_report_period(filing.report_date)}"
                 )
                 if not dry_run:
                     _send_notifications(notifiers, subject, body)
