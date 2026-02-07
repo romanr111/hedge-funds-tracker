@@ -4,10 +4,11 @@ import argparse
 import importlib
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from tracker.config import AppConfig
+from tracker.config import AppConfig, ManagerConfig
 cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
 
 
@@ -38,7 +39,9 @@ def test_test_notification_skips_runtime_initialization(monkeypatch: pytest.Monk
 
     def fake_parse_args(self: argparse.ArgumentParser) -> argparse.Namespace:
         del self
-        return argparse.Namespace(notify_on_first_start=False, test_notification=True, dry_run=False)
+        return argparse.Namespace(
+            notify_on_first_start=False, test_notification=True, dry_run=False, clean_state=None
+        )
 
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
@@ -64,3 +67,58 @@ def test_test_notification_skips_runtime_initialization(monkeypatch: pytest.Monk
     exit_code = cli_main_module._main(logging.getLogger("test"))
     assert exit_code == 0
     assert len(fake_notifier.sent) == 1
+
+
+def test_clean_state_clears_store_before_processing(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _FakeStore:
+        def clear_state(self) -> int:
+            calls.append("clear")
+            return 2
+
+        def close(self) -> None:
+            calls.append("close")
+
+    fake_store = _FakeStore()
+
+    def fake_parse_args(self: argparse.ArgumentParser) -> argparse.Namespace:
+        del self
+        return argparse.Namespace(
+            notify_on_first_start=True,
+            clean_state="clean_state",
+            test_notification=False,
+            dry_run=False,
+        )
+
+    def fake_load_config(*, notify_initial: bool) -> AppConfig:
+        assert notify_initial is True
+        return AppConfig(
+            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_rate_limit_per_sec=5.0,
+            max_filing_age_days=180,
+            db_path=Path("data/test.sqlite3"),
+            managers=[ManagerConfig(name="Test Fund", cik="0000000001")],
+            notifiers=[],
+            telegram_bot_token=None,
+            telegram_chat_id=None,
+            notify_initial=True,
+        )
+
+    def fake_build_runtime(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        return SimpleNamespace(client=object(), store=fake_store, notifiers=[])
+
+    def fake_process_manager(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        calls.append("process")
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
+    monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(cli_main_module, "process_manager", fake_process_manager)
+
+    exit_code = cli_main_module._main(logging.getLogger("test"))
+
+    assert exit_code == 0
+    assert calls == ["clear", "process", "close"]
