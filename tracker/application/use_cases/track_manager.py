@@ -23,6 +23,14 @@ def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: s
         notifier.send(subject, body)
 
 
+def _build_no_position_changes_message(report_date: str | None, filing_date: str | None) -> str:
+    return (
+        f"📅 Period: {format_report_period(report_date)}\n"
+        f"Filed {filing_date}.\n\n"
+        "No position changes detected in this filing."
+    )
+
+
 def process_manager(
     manager: Manager,
     store: StateRepository,
@@ -59,6 +67,7 @@ def process_manager(
 
     state = store.get_state(manager.cik)
     last_accession = state.last_accession if state else None
+    last_notified_accession = state.last_notified_accession if state else None
     new_filings = []
 
     if state is None:
@@ -72,12 +81,34 @@ def process_manager(
 
     if not new_filings:
         app_logger.info("Manager status", extra={"manager": manager.name, "cik": manager.cik, "status": "no_new_filings"})
+        if state is not None and last_accession and filings:
+            latest_filing = filings[0]
+            should_notify_existing_filing = (
+                latest_filing.accession == last_accession
+                and last_notified_accession != latest_filing.accession
+                and is_filing_within_hours(latest_filing, now=now_fn(), hours=RECENT_NO_CHANGE_NOTIFICATION_HOURS)
+            )
+            if should_notify_existing_filing and not dry_run and notifiers:
+                subject = format_subject(manager.name)
+                body = _build_no_position_changes_message(latest_filing.report_date, latest_filing.filing_date)
+                _send_notifications(notifiers, subject, body)
+                last_notified_accession = latest_filing.accession
+                store.upsert_state(
+                    cik=state.cik,
+                    name=state.name,
+                    last_accession=state.last_accession,
+                    last_filing_date=state.last_filing_date,
+                    last_report_date=state.last_report_date,
+                    last_positions=state.last_positions,
+                    last_notified_accession=last_notified_accession,
+                )
         return
 
     previous_positions = state.last_positions if state else None
 
     # Process oldest-to-newest so diffs are deterministic.
     for filing in reversed(new_filings):
+        notified_for_filing = False
         try:
             info_url = client.find_information_table_url(manager.cik, filing.accession)
             xml_text = client.get_text(info_url)
@@ -96,8 +127,9 @@ def process_manager(
                     f"Baseline stored for {manager.name} ({manager.cik}).\n\n"
                     f"📅 Period: {format_report_period(filing.report_date)}"
                 )
-                if not dry_run:
+                if not dry_run and notifiers:
                     _send_notifications(notifiers, subject, body)
+                    notified_for_filing = True
             else:
                 app_logger.info(
                     "Manager status",
@@ -137,8 +169,9 @@ def process_manager(
                     f"Filed {filing.filing_date}.\n\n"
                     f"{summary}"
                 )
-                if not dry_run:
+                if not dry_run and notifiers:
                     _send_notifications(notifiers, subject, body)
+                    notified_for_filing = True
             else:
                 app_logger.info(
                     "Manager status",
@@ -149,17 +182,20 @@ def process_manager(
                         "accession": filing.accession,
                     },
                 )
-                if is_filing_within_hours(filing, now=now_fn(), hours=RECENT_NO_CHANGE_NOTIFICATION_HOURS):
+                if (
+                    is_filing_within_hours(filing, now=now_fn(), hours=RECENT_NO_CHANGE_NOTIFICATION_HOURS)
+                    and last_notified_accession != filing.accession
+                    and not dry_run
+                    and notifiers
+                ):
                     subject = format_subject(manager.name)
-                    body = (
-                        f"📅 Period: {format_report_period(filing.report_date)}\n"
-                        f"Filed {filing.filing_date}.\n\n"
-                        "No position changes detected in this filing."
-                    )
-                    if not dry_run:
-                        _send_notifications(notifiers, subject, body)
+                    body = _build_no_position_changes_message(filing.report_date, filing.filing_date)
+                    _send_notifications(notifiers, subject, body)
+                    notified_for_filing = True
 
         if not dry_run:
+            if notified_for_filing:
+                last_notified_accession = filing.accession
             store.upsert_state(
                 cik=manager.cik,
                 name=manager.name,
@@ -167,5 +203,6 @@ def process_manager(
                 last_filing_date=filing.filing_date,
                 last_report_date=filing.report_date,
                 last_positions=positions,
+                last_notified_accession=last_notified_accession,
             )
         previous_positions = positions

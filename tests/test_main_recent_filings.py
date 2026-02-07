@@ -68,8 +68,9 @@ class _Store:
         last_filing_date: str | None,
         last_report_date: str | None,
         last_positions: list[Position] | None,
+        last_notified_accession: str | None,
     ) -> None:
-        del cik, name, last_filing_date, last_report_date, last_positions
+        del cik, name, last_filing_date, last_report_date, last_positions, last_notified_accession
         self.writes.append(last_accession or "")
 
     def close(self) -> None:
@@ -94,6 +95,7 @@ class _StoreWithExistingState:
         last_filing_date: str | None,
         last_report_date: str | None,
         last_positions: list[Position] | None,
+        last_notified_accession: str | None,
     ) -> None:
         payload: dict[str, Any] = {
             "cik": cik,
@@ -102,6 +104,7 @@ class _StoreWithExistingState:
             "last_filing_date": last_filing_date,
             "last_report_date": last_report_date,
             "last_positions": last_positions,
+            "last_notified_accession": last_notified_accession,
         }
         self.writes.append(payload)
         self._state = ManagerState(
@@ -111,6 +114,7 @@ class _StoreWithExistingState:
             last_filing_date=last_filing_date,
             last_report_date=last_report_date,
             last_positions=last_positions,
+            last_notified_accession=last_notified_accession,
         )
 
     def close(self) -> None:
@@ -197,6 +201,38 @@ class _CapturingNotifier:
 
     def send(self, subject: str, body: str) -> None:
         self.messages.append((subject, body))
+
+
+class _ClientWithNoNewFilings:
+    def __init__(self, *, accession: str, filing_date: str, report_date: str, acceptance_datetime: str | None) -> None:
+        self._accession = accession
+        self._filing_date = filing_date
+        self._report_date = report_date
+        self._acceptance_datetime = acceptance_datetime
+        self.accessions: list[str] = []
+
+    def get_submissions(self, cik: str) -> dict[str, Any]:
+        del cik
+        return {
+            "filings": {
+                "recent": {
+                    "accessionNumber": [self._accession],
+                    "form": ["13F-HR"],
+                    "filingDate": [self._filing_date],
+                    "reportDate": [self._report_date],
+                    "acceptanceDateTime": [self._acceptance_datetime],
+                }
+            }
+        }
+
+    def find_information_table_url(self, cik: str, accession: str) -> str:
+        del cik
+        self.accessions.append(accession)
+        raise AssertionError("No new filings should not fetch infotable URL")
+
+    def get_text(self, url: str) -> str:
+        del url
+        raise AssertionError("No new filings should not download infotable")
 
 
 def _fake_information_table_xml(positions: list[dict[str, Any]]) -> str:
@@ -369,6 +405,7 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     assert saved["last_filing_date"] == new_filing_date
     assert saved["last_report_date"] == new_report_date
     assert {position.get("cusip") for position in (saved["last_positions"] or [])} == {"000000001", "000000002"}
+    assert saved["last_notified_accession"] == "new-report"
 
 
 def test_new_filing_without_position_changes_recent_sends_notification() -> None:
@@ -428,6 +465,7 @@ def test_new_filing_without_position_changes_recent_sends_notification() -> None
 
     assert len(store.writes) == 1
     assert store.writes[0]["last_accession"] == "new-report"
+    assert store.writes[0]["last_notified_accession"] == "new-report"
 
 
 def test_new_filing_without_position_changes_older_than_24h_skips_notification() -> None:
@@ -482,3 +520,104 @@ def test_new_filing_without_position_changes_older_than_24h_skips_notification()
     assert notifier.messages == []
     assert len(store.writes) == 1
     assert store.writes[0]["last_accession"] == "new-report"
+    assert store.writes[0]["last_notified_accession"] is None
+
+
+def test_no_new_filings_recent_unnotified_accession_sends_single_notification() -> None:
+    manager = _Manager(name="Test Fund", cik="0000000000")
+    filing_date = _iso_days_ago(0)
+    report_date = _iso_days_ago(90)
+    accession = "known-latest"
+
+    state = ManagerState(
+        cik=manager.cik,
+        name=manager.name,
+        last_accession=accession,
+        last_filing_date=filing_date,
+        last_report_date=report_date,
+        last_positions=[
+            {
+                "name": "Alpha Corp",
+                "title": "COM",
+                "cusip": "000000001",
+                "value": 100,
+                "shares": 10,
+            }
+        ],
+        last_notified_accession=None,
+    )
+    store = _StoreWithExistingState(state)
+    client = _ClientWithNoNewFilings(
+        accession=accession,
+        filing_date=filing_date,
+        report_date=report_date,
+        acceptance_datetime=_iso_hours_ago(3),
+    )
+    notifier = _CapturingNotifier()
+
+    process_manager(
+        manager,
+        store,
+        client,
+        notifiers=[notifier],
+        notify_initial=False,
+        dry_run=False,
+        max_filing_age_days=180,
+    )
+
+    assert client.accessions == []
+    assert len(notifier.messages) == 1
+    _, body = notifier.messages[0]
+    assert f"Period: {_quarter_label(report_date)}" in body
+    assert f"Filed {filing_date}." in body
+    assert "No position changes detected in this filing." in body
+    assert len(store.writes) == 1
+    assert store.writes[0]["last_accession"] == accession
+    assert store.writes[0]["last_notified_accession"] == accession
+
+
+def test_no_new_filings_recent_already_notified_accession_skips_duplicate_notification() -> None:
+    manager = _Manager(name="Test Fund", cik="0000000000")
+    filing_date = _iso_days_ago(0)
+    report_date = _iso_days_ago(90)
+    accession = "known-latest"
+
+    state = ManagerState(
+        cik=manager.cik,
+        name=manager.name,
+        last_accession=accession,
+        last_filing_date=filing_date,
+        last_report_date=report_date,
+        last_positions=[
+            {
+                "name": "Alpha Corp",
+                "title": "COM",
+                "cusip": "000000001",
+                "value": 100,
+                "shares": 10,
+            }
+        ],
+        last_notified_accession=accession,
+    )
+    store = _StoreWithExistingState(state)
+    client = _ClientWithNoNewFilings(
+        accession=accession,
+        filing_date=filing_date,
+        report_date=report_date,
+        acceptance_datetime=_iso_hours_ago(2),
+    )
+    notifier = _CapturingNotifier()
+
+    process_manager(
+        manager,
+        store,
+        client,
+        notifiers=[notifier],
+        notify_initial=False,
+        dry_run=False,
+        max_filing_age_days=180,
+    )
+
+    assert client.accessions == []
+    assert notifier.messages == []
+    assert store.writes == []
