@@ -24,12 +24,6 @@ def build_notifier_list(config: AppConfig, *, dry_run: bool, test_notification: 
         config.notifiers,
         telegram_bot_token=config.telegram_bot_token,
         telegram_chat_id=config.telegram_chat_id,
-        smtp_host=config.smtp_host,
-        smtp_port=config.smtp_port,
-        smtp_user=config.smtp_user,
-        smtp_pass=config.smtp_pass,
-        email_from=config.email_from,
-        email_to=config.email_to,
     )
 
 
