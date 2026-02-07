@@ -8,6 +8,10 @@ on:
     - cron: "0 4 * * *"
     # 05:00 UTC matches 07:00 Europe/Kyiv during standard time (UTC+2).
     - cron: "0 5 * * *"
+    # 16:00 UTC matches 19:00 Europe/Kyiv during DST (UTC+3).
+    - cron: "0 16 * * *"
+    # 17:00 UTC matches 19:00 Europe/Kyiv during standard time (UTC+2).
+    - cron: "0 17 * * *"
 
 permissions:
   contents: write
@@ -21,7 +25,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Schedule gate (07:00 Europe/Kyiv only)
+      - name: Schedule gate (07:00 and 19:00 Europe/Kyiv)
         id: schedule_gate
         run: |
           set -euo pipefail
@@ -35,7 +39,7 @@ jobs:
           kyiv_hour="$(TZ=Europe/Kyiv date '+%H')"
           echo "Current Kyiv time: ${kyiv_time}"
 
-          if [ "${kyiv_hour}" = "07" ]; then
+          if [ "${kyiv_hour}" = "07" ] || [ "${kyiv_hour}" = "19" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
             echo "In target window; continuing."
           else
