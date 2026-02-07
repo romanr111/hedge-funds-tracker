@@ -1,6 +1,6 @@
 # Hedge Fund 13F Tracker
 
-Lightweight daily checker for hedge fund 13F filings. It pulls each manager's SEC submissions JSON, detects new 13F-HR / 13F-HR/A filings, downloads the filing's `infotable.xml`, diffs positions vs. the last stored snapshot, and sends notifications to Telegram and/or email.
+Lightweight daily checker for hedge fund 13F filings. It pulls each manager's SEC submissions JSON, detects new 13F-HR / 13F-HR/A filings, downloads the filing's `infotable.xml`, diffs positions vs. the last stored snapshot, and sends notifications to Telegram.
 
 ## Data Sources (SEC official)
 - Submissions JSON: `https://data.sec.gov/submissions/CIK##########.json`
@@ -33,7 +33,7 @@ Required:
 Optional:
 - `MANAGERS_FILE` (path to `managers.json`)
 - `DB_PATH` (SQLite path, default `data/tracker.sqlite3`)
-- `NOTIFIERS` (comma-separated, e.g. `telegram,email`)
+- `NOTIFIERS` (comma-separated, e.g. `telegram`)
 - `SEC_RATE_LIMIT_PER_SEC` (requests/sec, must be <= 10; default 5)
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
 
@@ -42,14 +42,6 @@ Paths in `.env` may be relative to the repo root.
 Telegram:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
-
-Email:
-- `SMTP_HOST`
-- `SMTP_PORT` (default 587)
-- `SMTP_USER`
-- `SMTP_PASS`
-- `EMAIL_FROM`
-- `EMAIL_TO`
 
 ### Managers file format
 ```json
@@ -84,9 +76,7 @@ Setup steps:
 5. Optional repository variables/secrets:
    - Variable `SEC_RATE_LIMIT_PER_SEC` (default `5`)
    - Variable `MAX_FILING_AGE_DAYS` (default `180`)
-   - Variable `NOTIFIERS` (`telegram`, `email`, or `telegram,email`, default is `telegram`)
-   - Email secrets: `SMTP_HOST`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`, `EMAIL_TO`
-   - Optional variable `SMTP_PORT` (default `587`)
+   - Variable `NOTIFIERS` (`telegram`, default is `telegram`)
 6. Run once from Actions tab using `workflow_dispatch` to create baseline state.
 
 Note:

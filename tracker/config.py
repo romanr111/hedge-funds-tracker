@@ -69,12 +69,6 @@ class AppConfig:
     notifiers: list[str]
     telegram_bot_token: str | None
     telegram_chat_id: str | None
-    smtp_host: str | None
-    smtp_port: int
-    smtp_user: str | None
-    smtp_pass: str | None
-    email_from: str | None
-    email_to: str | None
     notify_initial: bool
 
 
@@ -161,12 +155,6 @@ def load_config(
 
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
-    smtp_host = os.environ.get("SMTP_HOST")
-    smtp_port = int(os.environ.get("SMTP_PORT", "587"))
-    smtp_user = os.environ.get("SMTP_USER")
-    smtp_pass = os.environ.get("SMTP_PASS")
-    email_from = os.environ.get("EMAIL_FROM")
-    email_to = os.environ.get("EMAIL_TO")
 
     return AppConfig(
         sec_user_agent=sec_user_agent,
@@ -177,11 +165,5 @@ def load_config(
         notifiers=notifiers_list,
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
-        smtp_host=smtp_host,
-        smtp_port=smtp_port,
-        smtp_user=smtp_user,
-        smtp_pass=smtp_pass,
-        email_from=email_from,
-        email_to=email_to,
         notify_initial=notify_initial,
     )

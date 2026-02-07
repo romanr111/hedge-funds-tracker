@@ -298,12 +298,6 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
             ["telegram"],
             telegram_bot_token=telegram_token,
             telegram_chat_id=telegram_chat_id,
-            smtp_host=None,
-            smtp_port=587,
-            smtp_user=None,
-            smtp_pass=None,
-            email_from=None,
-            email_to=None,
         )[0]
         notifiers = [real_notifier, notifier]
 

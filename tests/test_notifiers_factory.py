@@ -24,12 +24,6 @@ def test_build_notifiers_unknown_name_raises_value_error() -> None:
             ["sms"],
             telegram_bot_token=None,
             telegram_chat_id=None,
-            smtp_host=None,
-            smtp_port=587,
-            smtp_user=None,
-            smtp_pass=None,
-            email_from=None,
-            email_to=None,
         )
 
 
@@ -39,12 +33,6 @@ def test_build_notifiers_telegram_requires_credentials() -> None:
             ["telegram"],
             telegram_bot_token=None,
             telegram_chat_id=None,
-            smtp_host=None,
-            smtp_port=587,
-            smtp_user=None,
-            smtp_pass=None,
-            email_from=None,
-            email_to=None,
         )
 
 
@@ -53,12 +41,6 @@ def test_build_notifiers_builds_telegram_notifier() -> None:
         ["telegram"],
         telegram_bot_token="bot-token",
         telegram_chat_id="chat-id",
-        smtp_host=None,
-        smtp_port=587,
-        smtp_user=None,
-        smtp_pass=None,
-        email_from=None,
-        email_to=None,
     )
     assert len(notifiers) == 1
     assert isinstance(notifiers[0], TelegramNotifier)
@@ -66,7 +48,8 @@ def test_build_notifiers_builds_telegram_notifier() -> None:
 
 def test_build_notifiers_uses_custom_registry_builder() -> None:
     def build_custom(config: NotifierBuildConfig) -> Notifier:
-        assert config.smtp_port == 587
+        assert config.telegram_bot_token is None
+        assert config.telegram_chat_id is None
         return _CustomNotifier()
 
     custom_builders: Mapping[str, NotifierBuilder] = {"custom": build_custom}
@@ -74,12 +57,6 @@ def test_build_notifiers_uses_custom_registry_builder() -> None:
         ["custom"],
         telegram_bot_token=None,
         telegram_chat_id=None,
-        smtp_host=None,
-        smtp_port=587,
-        smtp_user=None,
-        smtp_pass=None,
-        email_from=None,
-        email_to=None,
         builders=custom_builders,
     )
     assert len(notifiers) == 1
@@ -92,11 +69,5 @@ def test_build_notifiers_empty_registry_is_not_replaced_with_default() -> None:
             ["telegram"],
             telegram_bot_token="bot-token",
             telegram_chat_id="chat-id",
-            smtp_host=None,
-            smtp_port=587,
-            smtp_user=None,
-            smtp_pass=None,
-            email_from=None,
-            email_to=None,
             builders={},
         )

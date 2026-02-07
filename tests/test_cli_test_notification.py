@@ -29,12 +29,6 @@ def _build_config() -> AppConfig:
         notifiers=["telegram"],
         telegram_bot_token="token",
         telegram_chat_id="chat",
-        smtp_host=None,
-        smtp_port=587,
-        smtp_user=None,
-        smtp_pass=None,
-        email_from=None,
-        email_to=None,
         notify_initial=False,
     )
 
