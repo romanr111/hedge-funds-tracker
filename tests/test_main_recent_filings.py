@@ -18,6 +18,11 @@ def _iso_days_ago(days_ago: int) -> str:
     return (datetime.now(timezone.utc).date() - timedelta(days=days_ago)).isoformat()
 
 
+def _iso_hours_ago(hours_ago: int) -> str:
+    value = datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+    return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def _quarter_label(iso_date: str) -> str:
     dt = datetime.strptime(iso_date, "%Y-%m-%d").date()
     quarter = ((dt.month - 1) // 3) + 1
@@ -125,6 +130,7 @@ class _Client:
                     "form": ["13F-HR", "13F-HR"],
                     "filingDate": [_iso_days_ago(5), _iso_days_ago(20)],
                     "reportDate": [_iso_days_ago(90), _iso_days_ago(120)],
+                    "acceptanceDateTime": [_iso_hours_ago(4), _iso_hours_ago(200)],
                 }
             }
         }
@@ -148,12 +154,16 @@ class _ClientWithNewFiling:
         new_report_date: str,
         known_report_date: str,
         new_report_xml: str,
+        new_acceptance_datetime: str | None = None,
+        known_acceptance_datetime: str | None = None,
     ) -> None:
         self._new_filing_date = new_filing_date
         self._known_filing_date = known_filing_date
         self._new_report_date = new_report_date
         self._known_report_date = known_report_date
         self._new_report_xml = new_report_xml
+        self._new_acceptance_datetime = new_acceptance_datetime
+        self._known_acceptance_datetime = known_acceptance_datetime
         self.accessions: list[str] = []
 
     def get_submissions(self, cik: str) -> dict[str, Any]:
@@ -165,6 +175,7 @@ class _ClientWithNewFiling:
                     "form": ["13F-HR", "13F-HR"],
                     "filingDate": [self._new_filing_date, self._known_filing_date],
                     "reportDate": [self._new_report_date, self._known_report_date],
+                    "acceptanceDateTime": [self._new_acceptance_datetime, self._known_acceptance_datetime],
                 }
             }
         }
@@ -358,3 +369,116 @@ def test_new_filing_sends_notification_and_updates_tracking_state() -> None:
     assert saved["last_filing_date"] == new_filing_date
     assert saved["last_report_date"] == new_report_date
     assert {position.get("cusip") for position in (saved["last_positions"] or [])} == {"000000001", "000000002"}
+
+
+def test_new_filing_without_position_changes_recent_sends_notification() -> None:
+    manager = _Manager(name="Test Fund", cik="0000000000")
+    new_filing_date = _iso_days_ago(0)
+    new_report_date = _iso_days_ago(90)
+    known_filing_date = _iso_days_ago(30)
+    known_report_date = _iso_days_ago(120)
+
+    previous_positions: list[Position] = [
+        {
+            "name": "Alpha Corp",
+            "title": "COM",
+            "cusip": "000000001",
+            "value": 100,
+            "shares": 10,
+        }
+    ]
+    state = ManagerState(
+        cik=manager.cik,
+        name=manager.name,
+        last_accession="known-old",
+        last_filing_date=known_filing_date,
+        last_report_date=known_report_date,
+        last_positions=previous_positions,
+    )
+
+    unchanged_report_xml = _fake_information_table_xml(previous_positions)
+    store = _StoreWithExistingState(state)
+    client = _ClientWithNewFiling(
+        new_filing_date=new_filing_date,
+        known_filing_date=known_filing_date,
+        new_report_date=new_report_date,
+        known_report_date=known_report_date,
+        new_report_xml=unchanged_report_xml,
+        new_acceptance_datetime=_iso_hours_ago(2),
+        known_acceptance_datetime=_iso_hours_ago(200),
+    )
+    notifier = _CapturingNotifier()
+
+    process_manager(
+        manager,
+        store,
+        client,
+        notifiers=[notifier],
+        notify_initial=False,
+        dry_run=False,
+        max_filing_age_days=180,
+    )
+
+    assert client.accessions == ["new-report"]
+    assert len(notifier.messages) == 1
+    _, body = notifier.messages[0]
+    assert f"Period: {_quarter_label(new_report_date)}" in body
+    assert f"Filed {new_filing_date}." in body
+    assert "No position changes detected in this filing." in body
+
+    assert len(store.writes) == 1
+    assert store.writes[0]["last_accession"] == "new-report"
+
+
+def test_new_filing_without_position_changes_older_than_24h_skips_notification() -> None:
+    manager = _Manager(name="Test Fund", cik="0000000000")
+    new_filing_date = _iso_days_ago(1)
+    new_report_date = _iso_days_ago(90)
+    known_filing_date = _iso_days_ago(30)
+    known_report_date = _iso_days_ago(120)
+
+    previous_positions: list[Position] = [
+        {
+            "name": "Alpha Corp",
+            "title": "COM",
+            "cusip": "000000001",
+            "value": 100,
+            "shares": 10,
+        }
+    ]
+    state = ManagerState(
+        cik=manager.cik,
+        name=manager.name,
+        last_accession="known-old",
+        last_filing_date=known_filing_date,
+        last_report_date=known_report_date,
+        last_positions=previous_positions,
+    )
+
+    unchanged_report_xml = _fake_information_table_xml(previous_positions)
+    store = _StoreWithExistingState(state)
+    client = _ClientWithNewFiling(
+        new_filing_date=new_filing_date,
+        known_filing_date=known_filing_date,
+        new_report_date=new_report_date,
+        known_report_date=known_report_date,
+        new_report_xml=unchanged_report_xml,
+        new_acceptance_datetime=_iso_hours_ago(30),
+        known_acceptance_datetime=_iso_hours_ago(200),
+    )
+    notifier = _CapturingNotifier()
+
+    process_manager(
+        manager,
+        store,
+        client,
+        notifiers=[notifier],
+        notify_initial=False,
+        dry_run=False,
+        max_filing_age_days=180,
+    )
+
+    assert client.accessions == ["new-report"]
+    assert notifier.messages == []
+    assert len(store.writes) == 1
+    assert store.writes[0]["last_accession"] == "new-report"
