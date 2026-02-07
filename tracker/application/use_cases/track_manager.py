@@ -10,7 +10,7 @@ from tracker.application.ports.state_repository import StateRepository
 from tracker.domain.diffing import build_diff_message, diff_positions
 from tracker.domain.exceptions import InformationTableLookupError, InvalidInformationTableError, SubmissionsFetchError
 from tracker.domain.filings import extract_filings, filter_by_filing_age
-from tracker.domain.formatting import format_subject
+from tracker.domain.formatting import format_report_period, format_subject
 from tracker.domain.models import Manager, Position
 from tracker.domain.parsing import parse_infotable
 from tracker.domain.timing import now_kyiv
@@ -89,10 +89,11 @@ def process_manager(
 
         if not previous_positions:
             if notify_initial:
-                subject = format_subject(manager.name, filing.filing_date)
+                subject = format_subject(manager.name)
                 body = (
                     f"Baseline stored for {manager.name} ({manager.cik}).\n"
-                    f"Accession {filing.accession} filed {filing.filing_date}."
+                    f"Period: {format_report_period(filing.report_date)}\n"
+                    f"Filed {filing.filing_date}."
                 )
                 if not dry_run:
                     _send_notifications(notifiers, subject, body)
@@ -128,11 +129,11 @@ def process_manager(
                         "decreased_positions_count": len(diff.decreased_positions),
                     },
                 )
-                subject = format_subject(manager.name, filing.filing_date)
+                subject = format_subject(manager.name)
                 summary = build_diff_message(diff)
                 body = (
-                    f"Accession {filing.accession} filed {filing.filing_date}.\n"
-                    f"Report date {filing.report_date}.\n\n"
+                    f"Period: {format_report_period(filing.report_date)}\n"
+                    f"Filed {filing.filing_date}.\n\n"
                     f"{summary}"
                 )
                 if not dry_run:
