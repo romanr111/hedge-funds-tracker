@@ -4,8 +4,11 @@ import argparse
 import logging
 from collections.abc import Sequence
 
-from tracker.application.use_cases.track_manager import process_manager
 from tracker.application.ports.notifier import NotifierPort
+from tracker.application.use_cases.notify_quarterly_reports_completion import (
+    notify_if_all_reports_published_for_current_quarter,
+)
+from tracker.application.use_cases.track_manager import process_manager
 from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
 from tracker.domain.exceptions import StateStoreError
@@ -98,9 +101,10 @@ def _main(logger: logging.Logger) -> int:
         cleared_rows = runtime.store.clear_state()
         logger.info("State store cleared before run", extra={"rows_deleted": cleared_rows})
 
-    for manager_config in config.managers:
+    managers = [Manager(name=manager_config.name, cik=manager_config.cik) for manager_config in config.managers]
+    for manager in managers:
         process_manager(
-            Manager(name=manager_config.name, cik=manager_config.cik),
+            manager,
             runtime.store,
             runtime.client,
             runtime.notifiers,
@@ -109,6 +113,14 @@ def _main(logger: logging.Logger) -> int:
             max_filing_age_days=config.max_filing_age_days,
             logger=logger,
         )
+
+    notify_if_all_reports_published_for_current_quarter(
+        managers,
+        runtime.store,
+        runtime.notifiers,
+        dry_run=args.dry_run,
+        logger=logger,
+    )
 
     runtime.store.close()
     logger.info(
