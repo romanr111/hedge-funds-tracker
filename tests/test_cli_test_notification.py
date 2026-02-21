@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tracker.application.use_cases.run_trend_engine import TrendEngineResult
 from tracker.config import AppConfig, ManagerConfig
 cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
 
@@ -98,7 +99,7 @@ def test_clean_state_clears_store_before_processing(monkeypatch: pytest.MonkeyPa
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
-            managers=[ManagerConfig(name="Test Fund", cik="0000000001")],
+            managers=[ManagerConfig(name="Test Fund", cik="0000000001", weight=1.0)],
             notifiers=[],
             telegram_bot_token=None,
             telegram_chat_id=None,
@@ -113,12 +114,24 @@ def test_clean_state_clears_store_before_processing(monkeypatch: pytest.MonkeyPa
         del args, kwargs
         calls.append("process")
 
+    def fake_sync_quarter_snapshots(*args: object, **kwargs: object) -> int:
+        del args, kwargs
+        calls.append("sync")
+        return 1
+
+    def fake_run_trend_engine(*args: object, **kwargs: object) -> TrendEngineResult:
+        del args, kwargs
+        calls.append("trend")
+        return TrendEngineResult(status="computed", report_quarter="2025Q4", signals_count=10)
+
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
     monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
     monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
     monkeypatch.setattr(cli_main_module, "process_manager", fake_process_manager)
+    monkeypatch.setattr(cli_main_module, "sync_quarter_snapshots", fake_sync_quarter_snapshots)
+    monkeypatch.setattr(cli_main_module, "run_trend_engine_for_latest_completed_quarter", fake_run_trend_engine)
 
     exit_code = cli_main_module._main(logging.getLogger("test"))
 
     assert exit_code == 0
-    assert calls == ["clear", "process", "close"]
+    assert calls == ["clear", "process", "sync", "trend", "close"]

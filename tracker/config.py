@@ -57,6 +57,7 @@ else:
 class ManagerConfig:
     name: str
     cik: str
+    weight: float
 
 
 @dataclass(frozen=True)
@@ -87,11 +88,25 @@ def _load_managers_from_iterable(items: Iterable[dict[str, object]]) -> list[Man
     for item in items:
         raw_name = item.get("name")
         raw_cik = item.get("cik")
+        raw_weight = item.get("weight")
         name = raw_name.strip() if isinstance(raw_name, str) else ""
         cik = raw_cik.strip() if isinstance(raw_cik, str) else ""
         if not name or not cik:
             raise ValueError("Each manager must include non-empty 'name' and 'cik'.")
-        managers.append(ManagerConfig(name=name, cik=cik))
+
+        if isinstance(raw_weight, (int, float)):
+            weight = float(raw_weight)
+        elif isinstance(raw_weight, str):
+            try:
+                weight = float(raw_weight.strip())
+            except ValueError as exc:
+                raise ValueError(f"Manager '{name}' has invalid 'weight' value.") from exc
+        else:
+            raise ValueError(f"Manager '{name}' must include numeric 'weight'.")
+
+        if weight <= 0:
+            raise ValueError(f"Manager '{name}' must have 'weight' > 0.")
+        managers.append(ManagerConfig(name=name, cik=cik, weight=weight))
     return managers
 
 
