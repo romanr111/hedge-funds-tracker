@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from collections.abc import Sequence
 
 from tracker.application.ports.notifier import NotifierPort
 from tracker.application.use_cases.notify_quarterly_reports_completion import (
     notify_if_all_reports_published_for_current_quarter,
 )
+from tracker.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
+from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
 from tracker.application.use_cases.track_manager import process_manager
 from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
@@ -113,6 +116,38 @@ def _main(logger: logging.Logger) -> int:
             max_filing_age_days=config.max_filing_age_days,
             logger=logger,
         )
+
+    sync_quarter_snapshots(
+        managers,
+        runtime.store,
+        runtime.client,
+        max_quarters=4,
+        max_filing_age_days=config.max_filing_age_days,
+        dry_run=args.dry_run,
+        logger=logger,
+    )
+    trend_blend_mode = os.environ.get("TREND_BLEND_MODE", "tactical").strip().lower()
+    try:
+        trend_result = run_trend_engine_for_latest_completed_quarter(
+            list(config.managers),
+            runtime.store,
+            dry_run=args.dry_run,
+            blend_mode=trend_blend_mode,
+            logger=logger,
+        )
+    except ValueError as exc:
+        runtime.store.close()
+        logger.error("Trend engine configuration failed", extra={"error": str(exc), "blend_mode": trend_blend_mode})
+        return 1
+    logger.info(
+        "Trend engine status",
+        extra={
+            "status": trend_result.status,
+            "report_quarter": trend_result.report_quarter,
+            "signals_count": trend_result.signals_count,
+            "blend_mode": trend_blend_mode,
+        },
+    )
 
     notify_if_all_reports_published_for_current_quarter(
         managers,

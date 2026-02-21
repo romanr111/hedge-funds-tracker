@@ -1,38 +1,57 @@
 [
   {
     "name": "Appaloosa Management LP",
-    "cik": "0001656456"
+    "cik": "0001656456",
+    "weight": 1.0
   },
   {
     "name": "Bridgewater Associates, LP",
-    "cik": "0001350694"
+    "cik": "0001350694",
+    "weight": 1.0
   },
   {
     "name": "Berkshire Hathaway Inc",
-    "cik": "0001067983"
+    "cik": "0001067983",
+    "weight": 1.0
   },
   {
     "name": "Greenhaven Associates Inc",
-    "cik": "0000846222"
+    "cik": "0000846222",
+    "weight": 1.0
   },
   {
     "name": "TCI Fund Management Ltd",
-    "cik": "0001647251"
+    "cik": "0001647251",
+    "weight": 1.0
   },
   {
     "name": "Pershing Square Capital Management, L.P.",
-    "cik": "0001336528"
+    "cik": "0001336528",
+    "weight": 1.0
   },
   {
     "name": "Akre Capital Management LLC",
-    "cik": "0001112520"
+    "cik": "0001112520",
+    "weight": 1.0
   },
   {
     "name": "Duquesne Family Office LLC",
-    "cik": "0001536411"
+    "cik": "0001536411",
+    "weight": 1.0
   },
   {
     "name": "Thomas Gayner - Markel Group",
-    "cik": "0001096343"
+    "cik": "0001096343",
+    "weight": 1.0
+  },
+  {
+    "name": "Viking Global Investors LP",
+    "cik": "0001103804",
+    "weight": 1.0
+  },
+  {
+    "name": "Francois Rochon - Giverny Capital",
+    "cik": "0001641864",
+    "weight": 1.0
   }
 ]
