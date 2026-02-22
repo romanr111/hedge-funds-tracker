@@ -22,6 +22,7 @@ from .models import (
 )
 from .parsing import parse_infotable
 from .quarters import parse_report_quarter, quarter_sort_key, report_quarter_for_day, report_quarter_from_iso_date
+from .portfolio import PipelineKPI, PortfolioSnapshot, PortfolioVintage, RiskFilteredSignal, TargetPosition
 from .timing import format_local_datetime, now_kyiv
 from .trends import TrendComputationResult, TrendSignalRow, aggregate_positions_by_instrument, compute_trend_signals, instrument_key
 
@@ -51,9 +52,14 @@ __all__ = [
     "now_kyiv",
     "parse_report_quarter",
     "parse_infotable",
+    "PipelineKPI",
+    "PortfolioSnapshot",
+    "PortfolioVintage",
     "quarter_sort_key",
+    "RiskFilteredSignal",
     "report_quarter_for_day",
     "report_quarter_from_iso_date",
+    "TargetPosition",
     "TrendComputationResult",
     "TrendSignalRow",
     "aggregate_positions_by_instrument",

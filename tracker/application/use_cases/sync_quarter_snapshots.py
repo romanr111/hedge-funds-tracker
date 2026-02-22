@@ -40,7 +40,7 @@ def sync_quarter_snapshots(
     store: StateStore,
     client: SecGateway,
     *,
-    max_quarters: int = 4,
+    max_quarters: int = 9,
     max_filing_age_days: int = 180,
     dry_run: bool,
     now_fn: Callable[[], datetime] = now_kyiv,
@@ -51,8 +51,31 @@ def sync_quarter_snapshots(
     if dry_run or not managers:
         return 0
 
+    managers_total = len(managers)
+    app_logger.info(
+        "Quarter snapshots sync started",
+        extra={
+            "managers_total": managers_total,
+            "max_quarters": max_quarters,
+            "max_filing_age_days": max_filing_age_days,
+        },
+    )
+
     upserted_rows = 0
-    for manager in managers:
+    for index, manager in enumerate(managers, start=1):
+        app_logger.info(
+            "Quarter snapshots sync progress",
+            extra={
+                "manager": manager.name,
+                "cik": manager.cik,
+                "manager_index": index,
+                "managers_total": managers_total,
+                "stage": "fetch_submissions",
+            },
+        )
+
+        manager_upserted_rows = 0
+        selected_quarters_count = 0
         try:
             submissions = client.get_submissions(manager.cik)
         except SubmissionsFetchError as exc:
@@ -72,6 +95,7 @@ def sync_quarter_snapshots(
             filings_by_quarter[report_quarter].append(filing)
 
         selected_quarters = sorted(filings_by_quarter.keys(), key=quarter_sort_key, reverse=True)[:max_quarters]
+        selected_quarters_count = len(selected_quarters)
         for report_quarter in selected_quarters:
             filing = max(
                 filings_by_quarter[report_quarter],
@@ -111,6 +135,22 @@ def sync_quarter_snapshots(
                 aum_value_k=aum_value_k,
             )
             upserted_rows += 1
+            manager_upserted_rows += 1
 
-    app_logger.info("Quarter snapshots sync completed", extra={"upserted_rows": upserted_rows})
+        app_logger.info(
+            "Quarter snapshots manager synced",
+            extra={
+                "manager": manager.name,
+                "cik": manager.cik,
+                "manager_index": index,
+                "managers_total": managers_total,
+                "selected_quarters": selected_quarters_count,
+                "upserted_rows_for_manager": manager_upserted_rows,
+            },
+        )
+
+    app_logger.info(
+        "Quarter snapshots sync completed",
+        extra={"upserted_rows": upserted_rows, "managers_total": managers_total},
+    )
     return upserted_rows

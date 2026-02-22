@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -61,6 +61,20 @@ class ManagerConfig:
 
 
 @dataclass(frozen=True)
+class PipelineConfig:
+    top_k: int = 20
+    min_conf: float = 0.45
+    hold_quarters: int = 2
+    position_cap: float = 0.07
+    sector_cap: float = 0.30
+    adv20_usd_min: float = 3_000_000.0
+    price_min: float = 5.0
+    cost_bps_per_side: float = 10.0
+    report_dir: Path = REPO_ROOT / "reports" / "quarterly"
+    symbol_metadata_file: Path = REPO_ROOT / "config" / "symbol_metadata.json"
+
+
+@dataclass(frozen=True)
 class AppConfig:
     sec_user_agent: str
     sec_rate_limit_per_sec: float
@@ -71,6 +85,7 @@ class AppConfig:
     telegram_bot_token: str | None
     telegram_chat_id: str | None
     notify_initial: bool
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
 
 
 def _split_csv(value: str | None) -> list[str]:
@@ -81,6 +96,42 @@ def _split_csv(value: str | None) -> list[str]:
 
 def _default_managers_file() -> Path:
     return REPO_ROOT / "config" / "managers.json"
+
+
+def _resolve_path(value: str | None, default: Path) -> Path:
+    raw = (value or "").strip()
+    if not raw:
+        return default
+    path = Path(raw)
+    if path.is_absolute():
+        return path
+    return REPO_ROOT / path
+
+
+def _env_int(name: str, default: int, *, minimum: int | None = None, maximum: int | None = None) -> int:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}.")
+    return value
+
+
+def _env_float(name: str, default: float, *, minimum: float | None = None, maximum: float | None = None) -> float:
+    raw = os.environ.get(name, str(default)).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number.") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"{name} must be >= {minimum}.")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be <= {maximum}.")
+    return value
 
 
 def _load_managers_from_iterable(items: Iterable[dict[str, object]]) -> list[ManagerConfig]:
@@ -170,6 +221,21 @@ def load_config(
 
     telegram_bot_token = os.environ.get("TELEGRAM_BOT_TOKEN")
     telegram_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    pipeline = PipelineConfig(
+        top_k=_env_int("PIPELINE_TOP_K", 20, minimum=1),
+        min_conf=_env_float("PIPELINE_MIN_CONF", 0.45, minimum=0.0, maximum=1.0),
+        hold_quarters=_env_int("PIPELINE_HOLD_QUARTERS", 2, minimum=1),
+        position_cap=_env_float("PIPELINE_POSITION_CAP", 0.07, minimum=0.0, maximum=1.0),
+        sector_cap=_env_float("PIPELINE_SECTOR_CAP", 0.30, minimum=0.0, maximum=1.0),
+        adv20_usd_min=_env_float("PIPELINE_ADV20_USD_MIN", 3_000_000.0, minimum=0.0),
+        price_min=_env_float("PIPELINE_PRICE_MIN", 5.0, minimum=0.0),
+        cost_bps_per_side=_env_float("PIPELINE_COST_BPS_PER_SIDE", 10.0, minimum=0.0),
+        report_dir=_resolve_path(os.environ.get("PIPELINE_REPORT_DIR"), REPO_ROOT / "reports" / "quarterly"),
+        symbol_metadata_file=_resolve_path(
+            os.environ.get("SYMBOL_METADATA_FILE"),
+            REPO_ROOT / "config" / "symbol_metadata.json",
+        ),
+    )
 
     return AppConfig(
         sec_user_agent=sec_user_agent,
@@ -181,4 +247,5 @@ def load_config(
         telegram_bot_token=telegram_bot_token,
         telegram_chat_id=telegram_chat_id,
         notify_initial=notify_initial,
+        pipeline=pipeline,
     )

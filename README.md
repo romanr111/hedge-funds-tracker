@@ -38,6 +38,17 @@ Optional:
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
 - `TREND_BLEND_MODE` (`tactical` by default; also supports `portfolio`)
 - `TREND_LIVE_PRICES_SYMBOLS_FILE` (symbol map for live price fetch from `stooq`, default `config/cusip_tickers.json`)
+- Quarterly pipeline options:
+  - `PIPELINE_TOP_K` (default `20`)
+  - `PIPELINE_MIN_CONF` (default `0.45`)
+  - `PIPELINE_HOLD_QUARTERS` (default `2`)
+  - `PIPELINE_POSITION_CAP` (default `0.07`)
+  - `PIPELINE_SECTOR_CAP` (default `0.30`)
+  - `PIPELINE_ADV20_USD_MIN` (default `3000000`)
+  - `PIPELINE_PRICE_MIN` (default `5`)
+  - `PIPELINE_COST_BPS_PER_SIDE` (default `10`)
+  - `PIPELINE_REPORT_DIR` (default `reports/quarterly`)
+  - `SYMBOL_METADATA_FILE` (default `config/symbol_metadata.json`)
 
 Paths in `.env` may be relative to the repo root.
 For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
@@ -101,6 +112,12 @@ python -m tracker --dry-run
 python -m tracker --force-trend-recompute
 python -m tracker --show-trends-detailed
 python -m tracker --test-notification
+python -m tracker --run-quarterly-pipeline
+python -m tracker --run-quarterly-pipeline --pipeline-quarter 2025Q4
+python -m tracker --run-quarterly-pipeline --pipeline-dry-run-report
+python -m tracker --backfill-trend-history
+python -m tracker --backfill-trend-history --backfill-from-quarter 2023Q1 --backfill-to-quarter 2024Q4
+python -m tracker --backfill-trend-history --backfill-force --backfill-include-latest
 ```
 
 Flag reference:
@@ -120,7 +137,7 @@ Flag reference:
   Forces trend engine recalculation even when fingerprints are unchanged (bypasses `skipped_no_new_completed_quarter`
   and `skipped_no_top_change` short-circuit paths).
 - `--show-trends-detailed`
-  Prints a detailed trends table after the run (same style as `scripts/show_trends.py`).
+  Always prints the detailed trends table after the run (same style as `scripts/show_trends.py`), including non-interactive output.
   Related options:
   `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
 - `--trend-live-prices-symbols-file`
@@ -129,17 +146,93 @@ Flag reference:
 - `--test-notification`
   Sends a test notification immediately through configured notifiers and exits.
   Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
+- `--run-quarterly-pipeline`
+  Runs an additive research pipeline: risk-filter -> portfolio -> walk-forward backtest -> KPI report.
+  If trend history before selected `--pipeline-quarter` is short (less than 8 quarters), tracker auto-runs
+  historical backfill first to seed missing trend quarters, then runs pipeline.
+- `--pipeline-quarter`
+  Optional `YYYYQn` target quarter for quarterly pipeline. Default uses latest trend quarter available in DB.
+- `--pipeline-dry-run-report`
+  Runs quarterly pipeline and writes report files without persisting quarterly pipeline tables in SQLite.
+- `--backfill-trend-history`
+  Runs a separate historical trend backfill mode. It does not execute the daily notify flow.
+- `--backfill-from-quarter`, `--backfill-to-quarter`  
+  Optional backfill range in `YYYYQn`. If omitted, backfill targets the latest 9 historical quarters.
+- `--backfill-force`
+  Recomputes quarters even if trend signals already exist.
+- `--backfill-include-latest`
+  Includes latest completed quarter in backfill mode (excluded by default).
 
 Interactive UX note:
-- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints a compact
-  Top Buy / Top Sell table at the end of the run.
-- For explicit, full table output with symbols and filters, use either:
+- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints the detailed trend table by default.
+- To force the same detailed output in non-interactive runs, use:
   `python -m tracker --show-trends-detailed`
-  or
+- You can also print the same format directly with:
   `python scripts/show_trends.py --db <DB_PATH> --quarter <YYYYQn>`
+
+Backfill note:
+- Main trend engine remains latest-quarter only in the default tracker run.
+- Backfilled rows are explicitly marked in DB with `is_backfill=1` and `backfill_batch_id`.
 
 State viewer utility:
 ```bash
 python scripts/show_state.py
 python scripts/show_state.py --db data/tracker.sqlite3
 ```
+
+## Trend Engine Logic (Latest-Flow Core)
+`python -m tracker` computes trend signals for only one target quarter: the latest completed quarter common to all configured managers.
+
+### 1) Input gating
+- Build `common_quarters` as intersection across managers.
+- Pick latest quarter from that intersection as `target_quarter`.
+- Use a rolling window of up to 4 quarters ending at `target_quarter`.
+- Require at least 2 quarters and a full snapshot matrix (each manager present in each window quarter).
+- If requirements are not met, status is `pending_*` (expected waiting state, not a crash).
+
+### 2) Per-manager contribution
+For each instrument inside manager snapshots:
+- Convert positions to portfolio weights.
+- Compute trade flow (`trade_dw`) from shares/weights delta with corporate-action guard.
+- Robust-normalize flow with MAD-based sigma and clipped z-score.
+- Convert into manager signal contribution:
+  - `signal_value = manager_weight_effective * position_weight * flow_participation * tanh(z / 2)`
+
+Where:
+- `manager_weight_effective` = manager weight adjusted by manager quality multiplier, then normalized.
+- `position_weight` emphasizes meaningful positions.
+- `flow_participation` = how strongly manager actually traded this name.
+
+### 3) Instrument-level aggregation
+- `np_raw = sum(signal_value)`
+- `np_impulse_raw = sum(signal_value * entry_impulse_multiplier)` (boosts new large entries/exits)
+- Compute breadth and crowding:
+  - directional manager counts and directional participation weights
+  - `crowding_hhi` from normalized absolute contributions
+
+### 4) Memory (EWMA) and blend
+- `impulse_score` uses short half-life (1 quarter).
+- `accumulation_score` uses longer half-life (3 quarters).
+- Blended score:
+  - `tactical`: `0.60 * impulse + 0.40 * accumulation`
+  - `portfolio`: `0.35 * impulse + 0.65 * accumulation`
+
+### 5) Confidence layer
+Confidence combines:
+- breadth (count + weight),
+- persistence,
+- anti-crowding penalty,
+- magnitude vs quarter scale,
+- high-conviction bonus,
+- disagreement penalty,
+- live-price freshness decay.
+
+Final signal:
+- `trend_ewma = blended_score * confidence`
+- `trend_delta = trend_ewma - prev_trend_ewma`
+- regime is classified from sign, persistence, gates, and delta (`STRONG_BUY`, `REVERSAL_SELL`, etc.).
+
+### 6) Table actions (research, not auto-trading)
+- `ACTION_BUY`, `WATCH_BUY`, `MONITOR`
+- `WATCH_SELL`, `ACTION_SELL`, `MONITOR`
+- thresholds are confidence + regime based (see `tracker/interfaces/cli/main.py`).
