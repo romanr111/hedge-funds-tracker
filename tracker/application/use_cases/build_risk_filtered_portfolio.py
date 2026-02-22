@@ -102,6 +102,13 @@ def _normalize(weights: dict[str, float]) -> dict[str, float]:
     return {key: max(0.0, value) / total for key, value in weights.items()}
 
 
+def _sector_bucket(sector: str, instrument_key: str) -> str:
+    normalized = (sector or "").strip().upper()
+    if normalized and normalized != "UNKNOWN":
+        return normalized
+    return f"UNKNOWN::{instrument_key}"
+
+
 
 def _apply_caps(
     *,
@@ -316,7 +323,10 @@ def build_risk_filtered_portfolio(
 
     raw_weights = {item.instrument_key: item.score_risk for item in selected}
     normalized = _normalize(raw_weights)
-    sector_by_key = {item.instrument_key: item.sector for item in selected}
+    sector_by_key = {
+        item.instrument_key: _sector_bucket(item.sector, item.instrument_key)
+        for item in selected
+    }
     capped = _apply_caps(
         raw_weights=normalized,
         sector_by_key=sector_by_key,

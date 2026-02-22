@@ -49,6 +49,7 @@ Optional:
   - `PIPELINE_COST_BPS_PER_SIDE` (default `10`)
   - `PIPELINE_REPORT_DIR` (default `reports/quarterly`)
   - `SYMBOL_METADATA_FILE` (default `config/symbol_metadata.json`)
+  - `PIPELINE_FAIL_ON_QUALITY` (optional CSV from `WATCH,FAIL`; when set, CLI exits non-zero for listed quality statuses)
 
 Paths in `.env` may be relative to the repo root.
 For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
@@ -148,6 +149,7 @@ Flag reference:
   Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
 - `--run-quarterly-pipeline`
   Runs an additive research pipeline: risk-filter -> portfolio -> walk-forward backtest -> KPI report.
+  Entry timing uses actual filings availability: `max(filing_date across managers for quarter) + 1 day`, then snapped to next trading day.
   If trend history before selected `--pipeline-quarter` is short (less than 8 quarters), tracker auto-runs
   historical backfill first to seed missing trend quarters, then runs pipeline.
 - `--pipeline-quarter`

@@ -108,6 +108,33 @@ def _seed_trend_signals(db_path: Path, *, with_freshness: bool = False) -> None:
                     freshness_multiplier=0.35 if with_freshness else 1.0,
                     freshness_ok=False if with_freshness else None,
                 ),
+                TrendStockSignal(
+                    report_quarter="2025Q4",
+                    instrument_key="444444444",
+                    cusip="444444444",
+                    put_call=None,
+                    issuer_name="Delta Corp",
+                    title="COM",
+                    np_raw=0.02,
+                    np_adj=0.02,
+                    impulse_score=0.02,
+                    accumulation_score=0.01,
+                    confidence=0.90,
+                    trend_ewma=0.0009,
+                    trend_delta=0.0005,
+                    breadth_buy_weight=0.11,
+                    breadth_sell_weight=0.00,
+                    buy_managers=2,
+                    sell_managers=0,
+                    crowding_hhi=0.30,
+                    persistence_buy=1,
+                    persistence_sell=0,
+                    regime="STRONG_BUY",
+                    contributors_json="[]",
+                    computed_at=now_iso,
+                    freshness_multiplier=0.92 if with_freshness else 1.0,
+                    freshness_ok=True if with_freshness else None,
+                ),
             ],
         )
     finally:
@@ -123,6 +150,7 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
                 "111111111": "AAA",
                 "222222222": "BBB",
                 "333333333": "CCC",
+                "444444444": "DDD",
             },
             ensure_ascii=True,
         )
@@ -144,6 +172,7 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
     assert "AAA" in result.stdout
     assert "CCC" in result.stdout
     assert "BBB" not in result.stdout  # confidence 0.40 < default threshold 0.50
+    assert "DDD" not in result.stdout  # trend 0.0009 < buy-table threshold 0.001
     assert " | cusip " not in result.stdout
     assert "freshness indicator" not in result.stdout
 
@@ -151,7 +180,7 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
 def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path) -> None:
     db_path = tmp_path / "tracker.sqlite3"
     symbols_path = tmp_path / "symbols.json"
-    symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC"}, ensure_ascii=True))
+    symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC", "444444444": "DDD"}, ensure_ascii=True))
     _seed_trend_signals(db_path)
 
     stricter = _run_show_trends(
@@ -167,6 +196,7 @@ def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path
     assert stricter.returncode == 0
     assert "CCC" in stricter.stdout
     assert "AAA" not in stricter.stdout
+    assert "DDD" not in stricter.stdout
 
     invalid = _run_show_trends(
         "--db",
@@ -185,7 +215,7 @@ def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path
 def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: Path) -> None:
     db_path = tmp_path / "tracker.sqlite3"
     symbols_path = tmp_path / "symbols.json"
-    symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC"}, ensure_ascii=True))
+    symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC", "444444444": "DDD"}, ensure_ascii=True))
     _seed_trend_signals(db_path, with_freshness=True)
 
     result = _run_show_trends(
@@ -203,3 +233,4 @@ def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: P
     assert "freshness indicator" in result.stdout
     assert "✅" in result.stdout
     assert "❌" in result.stdout
+    assert "DDD" not in result.stdout

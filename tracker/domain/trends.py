@@ -50,6 +50,8 @@ MIN_HHI_PARTICIPANTS_FOR_PENALTY = 3
 DISAGREEMENT_GAMMA = 0.70
 MAGNITUDE_FALLBACK_SCALE = 0.08
 MAGNITUDE_QUARTER_PERCENTILE = 0.90
+MAGNITUDE_NP_WEIGHT = 0.50
+MAGNITUDE_BLEND_WEIGHT = 0.50
 
 PRICE_DRIFT_TOLERANCE = 0.15
 PRICE_DRIFT_DECAY_SCALE = 0.35
@@ -149,6 +151,36 @@ class _InstrumentState:
     trend_ewma: float
     persistence_buy: int
     persistence_sell: int
+
+
+@dataclass(frozen=True)
+class _QuarterSignalContext:
+    metadata: dict[str, str | None]
+    np_raw: float
+    np_adj: float
+    impulse_score: float
+    accumulation_score: float
+    blended_score: float
+    breadth_buy_weight: float
+    breadth_sell_weight: float
+    buy_managers: int
+    sell_managers: int
+    crowding_hhi: float
+    contributors: list[dict[str, Any]]
+    persistence_buy: int
+    persistence_sell: int
+    buy_gate: bool
+    sell_gate: bool
+    prev_trend: float
+    direction: Literal["BUY", "SELL"]
+    directional_weight: float
+    opposite_weight: float
+    directional_high_conviction_weight: float
+    directional_managers: int
+    opposite_managers: int
+    directional_persistence: int
+    freshness_multiplier: float
+    freshness_ok: bool | None
 
 
 def _clean_optional_str(value: object) -> str | None:
@@ -443,6 +475,8 @@ def _confidence_score(
     min_weight: float,
     magnitude_value: float,
     magnitude_scale: float,
+    blended_magnitude_value: float | None = None,
+    blended_magnitude_scale: float | None = None,
     directional_high_conviction_weight: float = 0.0,
     freshness_multiplier: float = 1.0,
 ) -> float:
@@ -457,7 +491,13 @@ def _confidence_score(
         crowding_score = 1.0 - max(0.0, (crowding_hhi - ANTI_CROWD_H0) / max(MAD_EPS, 1.0 - ANTI_CROWD_H0))
     else:
         crowding_score = 1.0
-    magnitude_score = min(1.0, abs(magnitude_value) / max(MAD_EPS, magnitude_scale))
+    magnitude_np_score = min(1.0, abs(magnitude_value) / max(MAD_EPS, magnitude_scale))
+    magnitude_score = magnitude_np_score
+    if blended_magnitude_value is not None and blended_magnitude_scale is not None:
+        magnitude_blend_score = min(1.0, abs(blended_magnitude_value) / max(MAD_EPS, blended_magnitude_scale))
+        magnitude_score = (MAGNITUDE_NP_WEIGHT * magnitude_np_score) + (
+            MAGNITUDE_BLEND_WEIGHT * magnitude_blend_score
+        )
 
     base = (0.40 * breadth_score) + (0.25 * persistence_score) + (0.20 * crowding_score) + (0.15 * magnitude_score)
     base_confidence = _clip(base, 0.0, 1.0)
@@ -821,7 +861,8 @@ def compute_trend_signals(
             quarter_magnitude_scale = MAGNITUDE_FALLBACK_SCALE
         keys = state_by_instrument.keys() | quarter_metrics.keys()
 
-        next_state: dict[str, _InstrumentState] = {}
+        quarter_contexts: dict[str, _QuarterSignalContext] = {}
+        quarter_abs_blended = []
         for key in keys:
             metric = quarter_metrics.get(key)
             previous_state = state_by_instrument.get(
@@ -885,41 +926,81 @@ def compute_trend_signals(
             freshness_multiplier = _price_freshness_multiplier(quarter_avg_price, latest_price)
             strong_drift = _is_strong_price_drift(quarter_avg_price, latest_price)
             freshness_ok = None if strong_drift is None else not strong_drift
-            confidence = _confidence_score(
+            abs_blended_score = abs(blended_score)
+            if abs_blended_score > 0:
+                quarter_abs_blended.append(abs_blended_score)
+            quarter_contexts[key] = _QuarterSignalContext(
+                metadata=metadata,
+                np_raw=np_raw,
+                np_adj=np_adj,
+                impulse_score=impulse_score,
+                accumulation_score=accumulation_score,
+                blended_score=blended_score,
+                breadth_buy_weight=breadth_buy_weight,
+                breadth_sell_weight=breadth_sell_weight,
+                buy_managers=buy_managers,
+                sell_managers=sell_managers,
+                crowding_hhi=crowding_hhi,
+                contributors=contributors,
+                persistence_buy=persistence_buy,
+                persistence_sell=persistence_sell,
+                buy_gate=buy_gate,
+                sell_gate=sell_gate,
+                prev_trend=prev_trend,
                 direction=direction,
                 directional_weight=directional_weight,
                 opposite_weight=opposite_weight,
+                directional_high_conviction_weight=directional_high_conviction_weight,
                 directional_managers=directional_managers,
                 opposite_managers=opposite_managers,
-                crowding_hhi=crowding_hhi,
                 directional_persistence=directional_persistence,
+                freshness_multiplier=freshness_multiplier,
+                freshness_ok=freshness_ok,
+            )
+
+        quarter_blended_magnitude_scale = _percentile(quarter_abs_blended, MAGNITUDE_QUARTER_PERCENTILE)
+        if quarter_blended_magnitude_scale <= 0:
+            quarter_blended_magnitude_scale = MAGNITUDE_FALLBACK_SCALE
+
+        next_state: dict[str, _InstrumentState] = {}
+        for key, context in quarter_contexts.items():
+            confidence = _confidence_score(
+                direction=context.direction,
+                directional_weight=context.directional_weight,
+                opposite_weight=context.opposite_weight,
+                directional_managers=context.directional_managers,
+                opposite_managers=context.opposite_managers,
+                crowding_hhi=context.crowding_hhi,
+                directional_persistence=context.directional_persistence,
                 min_managers=breadth_min_managers,
                 min_weight=breadth_min_weight,
-                magnitude_value=np_adj,
+                magnitude_value=context.np_adj,
                 magnitude_scale=quarter_magnitude_scale,
-                directional_high_conviction_weight=directional_high_conviction_weight,
-                freshness_multiplier=freshness_multiplier,
+                blended_magnitude_value=context.blended_score,
+                blended_magnitude_scale=quarter_blended_magnitude_scale,
+                directional_high_conviction_weight=context.directional_high_conviction_weight,
+                freshness_multiplier=context.freshness_multiplier,
             )
-            trend_ewma = blended_score * confidence
-            trend_delta = trend_ewma - prev_trend
+            trend_ewma = context.blended_score * confidence
+            trend_delta = trend_ewma - context.prev_trend
 
             regime = _classify_regime(
                 trend_ewma,
                 trend_delta,
-                prev_trend,
-                buy_gate=buy_gate,
-                sell_gate=sell_gate,
-                persistence_buy=persistence_buy,
-                persistence_sell=persistence_sell,
+                context.prev_trend,
+                buy_gate=context.buy_gate,
+                sell_gate=context.sell_gate,
+                persistence_buy=context.persistence_buy,
+                persistence_sell=context.persistence_sell,
             )
 
             next_state[key] = _InstrumentState(
-                metadata=metadata,
-                impulse_ewma=impulse_score,
-                accumulation_ewma=accumulation_score,
+                metadata=context.metadata,
+                impulse_ewma=context.impulse_score,
+                accumulation_ewma=context.accumulation_score,
                 trend_ewma=trend_ewma,
-                persistence_buy=persistence_buy,
-                persistence_sell=persistence_sell,
+                persistence_buy=context.persistence_buy,
+                persistence_sell=context.persistence_sell,
             )
 
             if idx != len(quarters) - 1:
@@ -927,28 +1008,28 @@ def compute_trend_signals(
 
             final_rows[key] = TrendSignalRow(
                 instrument_key=key,
-                cusip=metadata.get("cusip"),
-                put_call=metadata.get("put_call"),
-                issuer_name=metadata.get("issuer_name"),
-                title=metadata.get("title"),
-                np_raw=np_raw,
-                np_adj=np_adj,
-                impulse_score=impulse_score,
-                accumulation_score=accumulation_score,
+                cusip=context.metadata.get("cusip"),
+                put_call=context.metadata.get("put_call"),
+                issuer_name=context.metadata.get("issuer_name"),
+                title=context.metadata.get("title"),
+                np_raw=context.np_raw,
+                np_adj=context.np_adj,
+                impulse_score=context.impulse_score,
+                accumulation_score=context.accumulation_score,
                 confidence=confidence,
                 trend_ewma=trend_ewma,
                 trend_delta=trend_delta,
-                breadth_buy_weight=breadth_buy_weight,
-                breadth_sell_weight=breadth_sell_weight,
-                buy_managers=buy_managers,
-                sell_managers=sell_managers,
-                crowding_hhi=crowding_hhi,
-                persistence_buy=persistence_buy,
-                persistence_sell=persistence_sell,
+                breadth_buy_weight=context.breadth_buy_weight,
+                breadth_sell_weight=context.breadth_sell_weight,
+                buy_managers=context.buy_managers,
+                sell_managers=context.sell_managers,
+                crowding_hhi=context.crowding_hhi,
+                persistence_buy=context.persistence_buy,
+                persistence_sell=context.persistence_sell,
                 regime=regime,
-                contributors=contributors,
-                freshness_multiplier=freshness_multiplier,
-                freshness_ok=freshness_ok,
+                contributors=context.contributors,
+                freshness_multiplier=context.freshness_multiplier,
+                freshness_ok=context.freshness_ok,
             )
 
         state_by_instrument = next_state

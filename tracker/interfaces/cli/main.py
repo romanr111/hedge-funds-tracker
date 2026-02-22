@@ -28,7 +28,15 @@ from tracker.infrastructure.logging import configure_logging, log_context, new_t
 from tracker.infrastructure.market import StooqPriceGateway
 
 SELL_TABLE_MIN_CONF = 0.35
+BUY_TABLE_MIN_TREND = 0.001
 PIPELINE_AUTO_BACKFILL_MIN_QUARTERS = 8
+PIPELINE_HARD_FAIL_STATUSES = {
+    "invalid_as_of_quarter",
+    "no_trend_data",
+    "no_quarters",
+    "no_quarters_before_as_of",
+    "partial_data",
+}
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -149,7 +157,12 @@ def _print_detailed_trend_table(
         [
             item
             for item in signals
-            if "BUY" in item.regime and item.regime != "REVERSAL_SELL" and item.confidence >= min_conf
+            if (
+                "BUY" in item.regime
+                and item.regime != "REVERSAL_SELL"
+                and item.confidence >= min_conf
+                and item.trend_ewma >= BUY_TABLE_MIN_TREND
+            )
         ],
         key=lambda item: item.trend_ewma,
         reverse=True,
@@ -278,6 +291,22 @@ def _count_pipeline_trend_quarters(*, store: Any, as_of_quarter: str | None) -> 
         return len(quarters)
     target_key = quarter_sort_key(as_of_quarter)
     return sum(1 for quarter in quarters if quarter_sort_key(quarter) <= target_key)
+
+
+def _pipeline_quality_fail_set() -> set[str]:
+    raw = os.environ.get("PIPELINE_FAIL_ON_QUALITY", "")
+    values = {item.strip().upper() for item in raw.split(",") if item.strip()}
+    return {item for item in values if item in {"WATCH", "FAIL"}}
+
+
+def _pipeline_exit_code(*, status: str | None, quality_status: str | None, fail_on_quality: set[str]) -> int:
+    normalized_status = (status or "").strip().lower()
+    if normalized_status in PIPELINE_HARD_FAIL_STATUSES:
+        return 1
+    normalized_quality = (quality_status or "").strip().upper()
+    if normalized_quality and normalized_quality in fail_on_quality:
+        return 1
+    return 0
 
 
 def main() -> int:
@@ -624,7 +653,9 @@ def _main(logger: logging.Logger) -> int:
         logger=logger,
     )
 
+    pipeline_exit_code = 0
     if run_quarterly_pipeline_flag:
+        fail_on_quality = _pipeline_quality_fail_set()
         available_pipeline_quarters = _count_pipeline_trend_quarters(store=runtime.store, as_of_quarter=pipeline_quarter)
         if not args.dry_run and available_pipeline_quarters < PIPELINE_AUTO_BACKFILL_MIN_QUARTERS:
             logger.info(
@@ -705,6 +736,21 @@ def _main(logger: logging.Logger) -> int:
             if pipeline_result.quality_status:
                 print(f"Quality status: {pipeline_result.quality_status}")
 
+        pipeline_exit_code = _pipeline_exit_code(
+            status=pipeline_result.status,
+            quality_status=pipeline_result.quality_status,
+            fail_on_quality=fail_on_quality,
+        )
+        if pipeline_exit_code != 0:
+            logger.error(
+                "Quarterly pipeline quality gate failed",
+                extra={
+                    "status": pipeline_result.status,
+                    "quality_status": pipeline_result.quality_status,
+                    "fail_on_quality": sorted(fail_on_quality),
+                },
+            )
+
     runtime.store.close()
     logger.info(
         "Tracker run finished",
@@ -714,4 +760,4 @@ def _main(logger: logging.Logger) -> int:
             "dry_run": args.dry_run,
         },
     )
-    return 0
+    return pipeline_exit_code

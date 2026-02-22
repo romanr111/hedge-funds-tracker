@@ -507,6 +507,23 @@ class StateStore:
         except sqlite3.Error as exc:
             raise StateStoreError("Failed to list snapshots for selected quarters: {exc}".format(exc=exc)) from exc
 
+    def list_snapshots_for_quarter(self, report_quarter: str) -> list[ManagerQuarterSnapshot]:
+        try:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM manager_quarter_snapshot
+                WHERE report_quarter = ?
+                ORDER BY manager_name ASC, cik ASC
+                """,
+                (report_quarter,),
+            ).fetchall()
+            return [self._row_to_snapshot(row) for row in rows]
+        except sqlite3.Error as exc:
+            raise StateStoreError(
+                "Failed to list snapshots for quarter {quarter}: {exc}".format(quarter=report_quarter, exc=exc)
+            ) from exc
+
     def get_trend_run(self, report_quarter: str) -> TrendRun | None:
         try:
             row = self._conn.execute(

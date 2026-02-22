@@ -9,6 +9,7 @@ from typing import Any
 from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 SELL_TABLE_MIN_CONF = 0.35
+BUY_TABLE_MIN_TREND = 0.001
 
 
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -162,7 +163,12 @@ def main() -> int:
             [
                 item
                 for item in signals
-                if "BUY" in item.regime and item.regime != "REVERSAL_SELL" and item.confidence >= args.min_conf
+                if (
+                    "BUY" in item.regime
+                    and item.regime != "REVERSAL_SELL"
+                    and item.confidence >= args.min_conf
+                    and item.trend_ewma >= BUY_TABLE_MIN_TREND
+                )
             ],
             key=lambda item: item.trend_ewma,
             reverse=True,
