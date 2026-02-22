@@ -15,6 +15,8 @@ from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 WINDOW_QUARTERS = 4
 TREND_ENGINE_VERSION = "v1.4"
+COMPUTE_MODE_LATEST = "latest"
+COMPUTE_MODE_BACKFILL = "backfill"
 
 
 class _WeightedManagerLike(Protocol):
@@ -29,9 +31,11 @@ class TrendEngineResult:
     signals_count: int
 
 
+
 def _fingerprint(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
 
 
 def detect_latest_completed_report_quarter(
@@ -45,11 +49,13 @@ def detect_latest_completed_report_quarter(
     return common_quarters[-1]
 
 
+
 def _build_snapshot_index(snapshots: list[ManagerQuarterSnapshot]) -> dict[str, dict[str, ManagerQuarterSnapshot]]:
     by_quarter: dict[str, dict[str, ManagerQuarterSnapshot]] = {}
     for snapshot in snapshots:
         by_quarter.setdefault(snapshot.report_quarter, {})[snapshot.cik] = snapshot
     return by_quarter
+
 
 
 def _build_input_fingerprint_payload(
@@ -83,6 +89,7 @@ def _build_input_fingerprint_payload(
     }
 
 
+
 def _sanitize_latest_prices(latest_prices: dict[str, float] | None) -> dict[str, float] | None:
     if not latest_prices:
         return None
@@ -99,6 +106,7 @@ def _sanitize_latest_prices(latest_prices: dict[str, float] | None) -> dict[str,
         if key:
             normalized[key] = value
     return normalized or None
+
 
 
 def _build_top_fingerprint_payload(signals: list[TrendSignalRow], *, limit: int = 20) -> dict[str, list[str]]:
@@ -126,39 +134,45 @@ def _build_top_fingerprint_payload(signals: list[TrendSignalRow], *, limit: int 
     return {"top_buy": top_buy, "top_sell": top_sell, "reversals": reversals}
 
 
-def run_trend_engine_for_latest_completed_quarter(
+
+def run_trend_engine_for_target_quarter(
     managers: list[_WeightedManagerLike],
     store: StateStore,
     *,
+    target_quarter: str,
     dry_run: bool,
     blend_mode: str = "tactical",
     latest_prices: dict[str, float] | None = None,
     force_recompute: bool = False,
+    compute_mode: str = COMPUTE_MODE_LATEST,
+    backfill_batch_id: str | None = None,
+    skip_if_exists: bool = False,
     logger: logging.Logger | None = None,
 ) -> TrendEngineResult:
     app_logger = logger or logging.getLogger(__name__)
     resolved_latest_prices = _sanitize_latest_prices(latest_prices)
     if dry_run:
-        return TrendEngineResult(status="dry_run", report_quarter=None, signals_count=0)
+        return TrendEngineResult(status="dry_run", report_quarter=target_quarter, signals_count=0)
     if not managers:
-        return TrendEngineResult(status="no_managers", report_quarter=None, signals_count=0)
+        return TrendEngineResult(status="no_managers", report_quarter=target_quarter, signals_count=0)
+    if compute_mode not in {COMPUTE_MODE_LATEST, COMPUTE_MODE_BACKFILL}:
+        raise ValueError("compute_mode must be 'latest' or 'backfill'.")
 
-    target_quarter = detect_latest_completed_report_quarter(managers, store)
-    if target_quarter is None:
-        app_logger.info("Trend engine pending: no completed report quarter for all managers")
-        return TrendEngineResult(status="pending_no_completed_quarter", report_quarter=None, signals_count=0)
+    if skip_if_exists and store.has_trend_signals_for_quarter(target_quarter):
+        return TrendEngineResult(status="skipped_existing_quarter", report_quarter=target_quarter, signals_count=0)
 
     ciks = [manager.cik for manager in managers]
     common_quarters = store.list_common_report_quarters(ciks)
     common_quarters = sorted(common_quarters, key=quarter_sort_key)
     if target_quarter not in common_quarters:
         return TrendEngineResult(status="pending_no_target_quarter", report_quarter=target_quarter, signals_count=0)
+
     target_idx = common_quarters.index(target_quarter)
     quarter_window = common_quarters[max(0, target_idx - (WINDOW_QUARTERS - 1)) : target_idx + 1]
     if len(quarter_window) < 2:
         app_logger.info(
             "Trend engine pending: insufficient quarter history",
-            extra={"target_quarter": target_quarter, "quarters_count": len(quarter_window)},
+            extra={"target_quarter": target_quarter, "quarters_count": len(quarter_window), "compute_mode": compute_mode},
         )
         return TrendEngineResult(status="pending_insufficient_history", report_quarter=target_quarter, signals_count=0)
 
@@ -170,7 +184,12 @@ def run_trend_engine_for_latest_completed_quarter(
             if manager.cik not in snapshots_by_quarter.get(quarter, {}):
                 app_logger.info(
                     "Trend engine pending: incomplete snapshot matrix",
-                    extra={"target_quarter": target_quarter, "missing_quarter": quarter, "missing_cik": manager.cik},
+                    extra={
+                        "target_quarter": target_quarter,
+                        "missing_quarter": quarter,
+                        "missing_cik": manager.cik,
+                        "compute_mode": compute_mode,
+                    },
                 )
                 return TrendEngineResult(
                     status="pending_incomplete_snapshot_matrix",
@@ -183,12 +202,13 @@ def run_trend_engine_for_latest_completed_quarter(
     )
     previous_run = store.get_trend_run(target_quarter)
     now_iso = datetime.now(timezone.utc).isoformat()
+    is_backfill = compute_mode == COMPUTE_MODE_BACKFILL
 
     if not force_recompute and previous_run and previous_run.input_fingerprint == input_fingerprint:
         latest_trend_run_quarter = store.get_latest_trend_run_quarter()
         status = (
             "skipped_no_new_completed_quarter"
-            if latest_trend_run_quarter == target_quarter
+            if compute_mode == COMPUTE_MODE_LATEST and latest_trend_run_quarter == target_quarter
             else "skipped_unchanged_input"
         )
         store.upsert_trend_run(
@@ -198,6 +218,8 @@ def run_trend_engine_for_latest_completed_quarter(
             status=status,
             computed_at=now_iso,
             notes_json=previous_run.notes_json,
+            is_backfill=is_backfill,
+            backfill_batch_id=backfill_batch_id,
         )
         return TrendEngineResult(status=status, report_quarter=target_quarter, signals_count=0)
 
@@ -224,7 +246,13 @@ def run_trend_engine_for_latest_completed_quarter(
             top_fingerprint=top_fingerprint,
             status="skipped_no_top_change",
             computed_at=now_iso,
-            notes_json=json.dumps({"top": top_payload, "blend_mode": blend_mode}, separators=(",", ":"), ensure_ascii=True),
+            notes_json=json.dumps(
+                {"top": top_payload, "blend_mode": blend_mode, "compute_mode": compute_mode},
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ),
+            is_backfill=is_backfill,
+            backfill_batch_id=backfill_batch_id,
         )
         return TrendEngineResult(status="skipped_no_top_change", report_quarter=target_quarter, signals_count=0)
 
@@ -255,6 +283,8 @@ def run_trend_engine_for_latest_completed_quarter(
             computed_at=now_iso,
             freshness_multiplier=row.freshness_multiplier,
             freshness_ok=row.freshness_ok,
+            is_backfill=is_backfill,
+            backfill_batch_id=backfill_batch_id,
         )
         for row in computed.signals
     ]
@@ -265,11 +295,59 @@ def run_trend_engine_for_latest_completed_quarter(
         top_fingerprint=top_fingerprint,
         status="computed",
         computed_at=now_iso,
-        notes_json=json.dumps({"top": top_payload, "blend_mode": blend_mode}, separators=(",", ":"), ensure_ascii=True),
+        notes_json=json.dumps(
+            {"top": top_payload, "blend_mode": blend_mode, "compute_mode": compute_mode},
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ),
+        is_backfill=is_backfill,
+        backfill_batch_id=backfill_batch_id,
     )
 
     app_logger.info(
         "Trend engine completed",
-        extra={"report_quarter": target_quarter, "signals_count": len(rows_to_store)},
+        extra={
+            "report_quarter": target_quarter,
+            "signals_count": len(rows_to_store),
+            "compute_mode": compute_mode,
+            "backfill_batch_id": backfill_batch_id,
+        },
     )
     return TrendEngineResult(status="computed", report_quarter=target_quarter, signals_count=len(rows_to_store))
+
+
+
+def run_trend_engine_for_latest_completed_quarter(
+    managers: list[_WeightedManagerLike],
+    store: StateStore,
+    *,
+    dry_run: bool,
+    blend_mode: str = "tactical",
+    latest_prices: dict[str, float] | None = None,
+    force_recompute: bool = False,
+    logger: logging.Logger | None = None,
+) -> TrendEngineResult:
+    app_logger = logger or logging.getLogger(__name__)
+    if dry_run:
+        return TrendEngineResult(status="dry_run", report_quarter=None, signals_count=0)
+    if not managers:
+        return TrendEngineResult(status="no_managers", report_quarter=None, signals_count=0)
+
+    target_quarter = detect_latest_completed_report_quarter(managers, store)
+    if target_quarter is None:
+        app_logger.info("Trend engine pending: no completed report quarter for all managers")
+        return TrendEngineResult(status="pending_no_completed_quarter", report_quarter=None, signals_count=0)
+
+    return run_trend_engine_for_target_quarter(
+        managers,
+        store,
+        target_quarter=target_quarter,
+        dry_run=dry_run,
+        blend_mode=blend_mode,
+        latest_prices=latest_prices,
+        force_recompute=force_recompute,
+        compute_mode=COMPUTE_MODE_LATEST,
+        backfill_batch_id=None,
+        skip_if_exists=False,
+        logger=app_logger,
+    )

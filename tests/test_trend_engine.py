@@ -8,6 +8,7 @@ from tracker.application.use_cases.run_trend_engine import (
     _build_top_fingerprint_payload,
     detect_latest_completed_report_quarter,
     run_trend_engine_for_latest_completed_quarter,
+    run_trend_engine_for_target_quarter,
 )
 from tracker.config import ManagerConfig
 from tracker.domain.models import ManagerQuarterSnapshot
@@ -398,6 +399,133 @@ def test_run_trend_engine_force_recompute_bypasses_unchanged_input_skip(tmp_path
         )
         assert forced.status == "computed"
         assert forced.signals_count > 0
+    finally:
+        store.close()
+
+
+def test_run_trend_engine_for_target_quarter_marks_backfill_metadata(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(100, 900),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=_positions(300, 700),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q3",
+            accession="b-q3",
+            positions=_positions(50, 950),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q4",
+            accession="b-q4",
+            positions=_positions(200, 800),
+        )
+
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+        result = run_trend_engine_for_target_quarter(
+            managers,
+            store,
+            target_quarter="2025Q4",
+            dry_run=False,
+            compute_mode="backfill",
+            backfill_batch_id="batch-001",
+        )
+        assert result.status == "computed"
+
+        trend_run = store.get_trend_run("2025Q4")
+        assert trend_run is not None
+        assert trend_run.is_backfill is True
+        assert trend_run.backfill_batch_id == "batch-001"
+
+        signals = store.list_trend_stock_signals("2025Q4")
+        assert signals
+        assert all(item.is_backfill is True for item in signals)
+        assert all(item.backfill_batch_id == "batch-001" for item in signals)
+    finally:
+        store.close()
+
+
+def test_run_trend_engine_for_target_quarter_skip_if_exists(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(100, 900),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=_positions(300, 700),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q3",
+            accession="b-q3",
+            positions=_positions(50, 950),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q4",
+            accession="b-q4",
+            positions=_positions(200, 800),
+        )
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+
+        first = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert first.status == "computed"
+        first_run = store.get_trend_run("2025Q4")
+        assert first_run is not None
+        assert first_run.is_backfill is False
+
+        skipped = run_trend_engine_for_target_quarter(
+            managers,
+            store,
+            target_quarter="2025Q4",
+            dry_run=False,
+            compute_mode="backfill",
+            backfill_batch_id="batch-002",
+            skip_if_exists=True,
+        )
+        assert skipped.status == "skipped_existing_quarter"
+
+        second_run = store.get_trend_run("2025Q4")
+        assert second_run is not None
+        assert second_run.is_backfill is False
     finally:
         store.close()
 

@@ -65,6 +65,8 @@ class TrendRun:
     status: str
     computed_at: str
     notes_json: str | None = None
+    is_backfill: bool = False
+    backfill_batch_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -94,3 +96,5 @@ class TrendStockSignal:
     computed_at: str
     freshness_multiplier: float = 1.0
     freshness_ok: bool | None = None
+    is_backfill: bool = False
+    backfill_batch_id: str | None = None

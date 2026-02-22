@@ -227,7 +227,7 @@ def test_force_trend_recompute_flag_is_forwarded(monkeypatch: pytest.MonkeyPatch
     assert captured_force_flag == [True]
 
 
-def test_prints_trend_table_when_ready_and_tty(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_prints_detailed_trend_table_when_ready_and_tty(monkeypatch: pytest.MonkeyPatch) -> None:
     printed_quarters: list[str] = []
 
     class _FakeStore:
@@ -285,8 +285,16 @@ def test_prints_trend_table_when_ready_and_tty(monkeypatch: pytest.MonkeyPatch) 
         del args, kwargs
         return TrendEngineResult(status="computed", report_quarter="2025Q4", signals_count=10)
 
-    def fake_print_trend_table(store: object, report_quarter: str, *, min_conf: float = 0.5, limit: int = 10) -> None:
-        del store, min_conf, limit
+    def fake_print_detailed_table(
+        store: object,
+        report_quarter: str,
+        *,
+        min_conf: float = 0.5,
+        limit: int = 15,
+        show_reversals: bool = False,
+        symbols_file: str = "config/cusip_tickers.json",
+    ) -> None:
+        del store, min_conf, limit, show_reversals, symbols_file
         printed_quarters.append(report_quarter)
 
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
@@ -295,7 +303,7 @@ def test_prints_trend_table_when_ready_and_tty(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(cli_main_module, "process_manager", fake_process_manager)
     monkeypatch.setattr(cli_main_module, "sync_quarter_snapshots", fake_sync_quarter_snapshots)
     monkeypatch.setattr(cli_main_module, "run_trend_engine_for_latest_completed_quarter", fake_run_trend_engine)
-    monkeypatch.setattr(cli_main_module, "_print_trend_table", fake_print_trend_table)
+    monkeypatch.setattr(cli_main_module, "_print_detailed_trend_table", fake_print_detailed_table)
     monkeypatch.setattr(cli_main_module.sys.stdout, "isatty", lambda: True)
 
     exit_code = cli_main_module._main(logging.getLogger("test"))
@@ -462,3 +470,308 @@ def test_live_prices_are_loaded_and_passed_to_trend_engine(monkeypatch: pytest.M
 
     assert exit_code == 0
     assert captured_latest_prices == [{"02079K107": 314.9}]
+
+
+def test_backfill_mode_skips_daily_flow(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _FakeStore:
+        def close(self) -> None:
+            calls.append("close")
+
+    fake_store = _FakeStore()
+
+    def fake_parse_args(self: argparse.ArgumentParser) -> argparse.Namespace:
+        del self
+        return argparse.Namespace(
+            notify_on_first_start=False,
+            clean_state=None,
+            test_notification=False,
+            dry_run=False,
+            force_trend_recompute=False,
+            show_trends_detailed=False,
+            trends_quarter=None,
+            trends_min_conf=0.5,
+            trends_limit=15,
+            trends_show_reversals=False,
+            trends_symbols_file="config/cusip_tickers.json",
+            trend_live_prices_symbols_file="config/cusip_tickers.json",
+            run_quarterly_pipeline=False,
+            pipeline_quarter=None,
+            pipeline_dry_run_report=False,
+            backfill_trend_history=True,
+            backfill_from_quarter=None,
+            backfill_to_quarter=None,
+            backfill_force=False,
+            backfill_include_latest=False,
+        )
+
+    def fake_load_config(*, notify_initial: bool) -> AppConfig:
+        assert notify_initial is False
+        return AppConfig(
+            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_rate_limit_per_sec=5.0,
+            max_filing_age_days=180,
+            db_path=Path("data/test.sqlite3"),
+            managers=[ManagerConfig(name="Test Fund", cik="0000000001", weight=1.0)],
+            notifiers=[],
+            telegram_bot_token=None,
+            telegram_chat_id=None,
+            notify_initial=False,
+        )
+
+    def fake_build_runtime(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        return SimpleNamespace(client=object(), store=fake_store, notifiers=[], history_gateway=object())
+
+    def fail_daily(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("Daily flow should not run in backfill mode")
+
+    def fake_backfill(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        calls.append("backfill")
+        return SimpleNamespace(
+            status="completed",
+            batch_id="batch-test",
+            quarters_requested=3,
+            computed=2,
+            skipped_existing=1,
+            failed=0,
+            details=[],
+        )
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
+    monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(cli_main_module, "process_manager", fail_daily)
+    monkeypatch.setattr(cli_main_module, "sync_quarter_snapshots", fail_daily)
+    monkeypatch.setattr(cli_main_module, "run_trend_engine_for_latest_completed_quarter", fail_daily)
+    monkeypatch.setattr(cli_main_module, "notify_if_all_reports_published_for_current_quarter", fail_daily)
+    monkeypatch.setattr(cli_main_module, "run_backfill_trend_history", fake_backfill)
+    monkeypatch.setattr(cli_main_module, "_load_live_latest_prices", lambda **kwargs: {"02079K107": 314.9})
+
+    exit_code = cli_main_module._main(logging.getLogger("test"))
+
+    assert exit_code == 0
+    assert calls == ["backfill", "close"]
+
+
+def test_quarterly_pipeline_auto_backfill_runs_when_history_is_short(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    captured_backfill_to_quarter: list[str | None] = []
+
+    class _FakeStore:
+        def list_trend_quarters(self) -> list[str]:
+            return ["2025Q2"]
+
+        def close(self) -> None:
+            calls.append("close")
+
+    fake_store = _FakeStore()
+
+    def fake_parse_args(self: argparse.ArgumentParser) -> argparse.Namespace:
+        del self
+        return argparse.Namespace(
+            notify_on_first_start=False,
+            clean_state=None,
+            test_notification=False,
+            dry_run=False,
+            force_trend_recompute=False,
+            show_trends_detailed=False,
+            trends_quarter=None,
+            trends_min_conf=0.5,
+            trends_limit=15,
+            trends_show_reversals=False,
+            trends_symbols_file="config/cusip_tickers.json",
+            trend_live_prices_symbols_file="config/cusip_tickers.json",
+            run_quarterly_pipeline=True,
+            pipeline_quarter="2025Q2",
+            pipeline_dry_run_report=False,
+            backfill_trend_history=False,
+            backfill_from_quarter=None,
+            backfill_to_quarter=None,
+            backfill_force=False,
+            backfill_include_latest=False,
+        )
+
+    def fake_load_config(*, notify_initial: bool) -> AppConfig:
+        assert notify_initial is False
+        return AppConfig(
+            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_rate_limit_per_sec=5.0,
+            max_filing_age_days=180,
+            db_path=Path("data/test.sqlite3"),
+            managers=[ManagerConfig(name="Test Fund", cik="0000000001", weight=1.0)],
+            notifiers=[],
+            telegram_bot_token=None,
+            telegram_chat_id=None,
+            notify_initial=False,
+        )
+
+    def fake_build_runtime(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        return SimpleNamespace(client=object(), store=fake_store, notifiers=[], history_gateway=object())
+
+    def fake_process_manager(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        calls.append("process")
+
+    def fake_sync_quarter_snapshots(*args: object, **kwargs: object) -> int:
+        del args, kwargs
+        calls.append("sync")
+        return 0
+
+    def fake_run_trend_engine(*args: object, **kwargs: object) -> TrendEngineResult:
+        del args, kwargs
+        calls.append("trend")
+        return TrendEngineResult(status="computed", report_quarter="2025Q2", signals_count=10)
+
+    def fake_notify(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        calls.append("notify")
+
+    def fake_backfill(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args
+        calls.append("auto_backfill")
+        captured_backfill_to_quarter.append(kwargs.get("to_quarter"))
+        return SimpleNamespace(
+            status="completed",
+            batch_id="batch-auto",
+            quarters_requested=3,
+            computed=2,
+            skipped_existing=1,
+            failed=0,
+            details=[],
+        )
+
+    def fake_run_quarterly_pipeline(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        calls.append("pipeline")
+        return SimpleNamespace(
+            status="ok",
+            as_of_quarter="2025Q2",
+            run_id="run-1",
+            quality_status="WATCH",
+            report_dir=None,
+        )
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
+    monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(cli_main_module, "process_manager", fake_process_manager)
+    monkeypatch.setattr(cli_main_module, "sync_quarter_snapshots", fake_sync_quarter_snapshots)
+    monkeypatch.setattr(cli_main_module, "run_trend_engine_for_latest_completed_quarter", fake_run_trend_engine)
+    monkeypatch.setattr(cli_main_module, "notify_if_all_reports_published_for_current_quarter", fake_notify)
+    monkeypatch.setattr(cli_main_module, "run_backfill_trend_history", fake_backfill)
+    monkeypatch.setattr(cli_main_module, "run_quarterly_pipeline", fake_run_quarterly_pipeline)
+    monkeypatch.setattr(cli_main_module, "_load_live_latest_prices", lambda **kwargs: {"02079K107": 314.9})
+
+    exit_code = cli_main_module._main(logging.getLogger("test"))
+
+    assert exit_code == 0
+    assert "auto_backfill" in calls
+    assert calls.index("auto_backfill") < calls.index("pipeline")
+    assert captured_backfill_to_quarter == ["2025Q2"]
+    assert calls[-1] == "close"
+
+
+def test_quarterly_pipeline_skips_auto_backfill_when_history_is_sufficient(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    class _FakeStore:
+        def list_trend_quarters(self) -> list[str]:
+            return ["2024Q1", "2024Q2", "2024Q3", "2024Q4", "2025Q1", "2025Q2", "2025Q3", "2025Q4"]
+
+        def close(self) -> None:
+            calls.append("close")
+
+    fake_store = _FakeStore()
+
+    def fake_parse_args(self: argparse.ArgumentParser) -> argparse.Namespace:
+        del self
+        return argparse.Namespace(
+            notify_on_first_start=False,
+            clean_state=None,
+            test_notification=False,
+            dry_run=False,
+            force_trend_recompute=False,
+            show_trends_detailed=False,
+            trends_quarter=None,
+            trends_min_conf=0.5,
+            trends_limit=15,
+            trends_show_reversals=False,
+            trends_symbols_file="config/cusip_tickers.json",
+            trend_live_prices_symbols_file="config/cusip_tickers.json",
+            run_quarterly_pipeline=True,
+            pipeline_quarter=None,
+            pipeline_dry_run_report=False,
+            backfill_trend_history=False,
+            backfill_from_quarter=None,
+            backfill_to_quarter=None,
+            backfill_force=False,
+            backfill_include_latest=False,
+        )
+
+    def fake_load_config(*, notify_initial: bool) -> AppConfig:
+        assert notify_initial is False
+        return AppConfig(
+            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_rate_limit_per_sec=5.0,
+            max_filing_age_days=180,
+            db_path=Path("data/test.sqlite3"),
+            managers=[ManagerConfig(name="Test Fund", cik="0000000001", weight=1.0)],
+            notifiers=[],
+            telegram_bot_token=None,
+            telegram_chat_id=None,
+            notify_initial=False,
+        )
+
+    def fake_build_runtime(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        return SimpleNamespace(client=object(), store=fake_store, notifiers=[], history_gateway=object())
+
+    def fake_process_manager(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+    def fake_sync_quarter_snapshots(*args: object, **kwargs: object) -> int:
+        del args, kwargs
+        return 0
+
+    def fake_run_trend_engine(*args: object, **kwargs: object) -> TrendEngineResult:
+        del args, kwargs
+        return TrendEngineResult(status="computed", report_quarter="2025Q4", signals_count=10)
+
+    def fake_notify(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+
+    def fail_backfill(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        raise AssertionError("Auto-backfill should not run when trend history is sufficient")
+
+    def fake_run_quarterly_pipeline(*args: object, **kwargs: object) -> SimpleNamespace:
+        del args, kwargs
+        calls.append("pipeline")
+        return SimpleNamespace(
+            status="ok",
+            as_of_quarter="2025Q4",
+            run_id="run-1",
+            quality_status="PASS",
+            report_dir=None,
+        )
+
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
+    monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
+    monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
+    monkeypatch.setattr(cli_main_module, "process_manager", fake_process_manager)
+    monkeypatch.setattr(cli_main_module, "sync_quarter_snapshots", fake_sync_quarter_snapshots)
+    monkeypatch.setattr(cli_main_module, "run_trend_engine_for_latest_completed_quarter", fake_run_trend_engine)
+    monkeypatch.setattr(cli_main_module, "notify_if_all_reports_published_for_current_quarter", fake_notify)
+    monkeypatch.setattr(cli_main_module, "run_backfill_trend_history", fail_backfill)
+    monkeypatch.setattr(cli_main_module, "run_quarterly_pipeline", fake_run_quarterly_pipeline)
+    monkeypatch.setattr(cli_main_module, "_load_live_latest_prices", lambda **kwargs: {"02079K107": 314.9})
+
+    exit_code = cli_main_module._main(logging.getLogger("test"))
+
+    assert exit_code == 0
+    assert calls == ["pipeline", "close"]
