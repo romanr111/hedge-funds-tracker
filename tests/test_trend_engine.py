@@ -696,6 +696,19 @@ def test_confidence_directional_and_disagreement_penalty() -> None:
         magnitude_value=0.05,
         magnitude_scale=0.05,
     )
+    heavily_conflicted = _confidence_score(
+        direction="BUY",
+        directional_weight=0.20,
+        opposite_weight=0.40,
+        directional_managers=4,
+        opposite_managers=4,
+        crowding_hhi=0.25,
+        directional_persistence=2,
+        min_managers=3,
+        min_weight=0.10,
+        magnitude_value=0.05,
+        magnitude_scale=0.05,
+    )
     wrong_direction = _confidence_score(
         direction="SELL",
         directional_weight=0.03,
@@ -711,6 +724,7 @@ def test_confidence_directional_and_disagreement_penalty() -> None:
     )
 
     assert directional > conflicted
+    assert conflicted > heavily_conflicted
     assert wrong_direction < conflicted
 
 
