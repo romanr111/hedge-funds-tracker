@@ -10,6 +10,7 @@ from tracker.application.use_cases.build_risk_filtered_portfolio import build_ri
 from tracker.application.use_cases.generate_kpi_report import generate_kpi_report
 from tracker.application.use_cases.run_walk_forward_backtest import run_walk_forward_backtest
 from tracker.config import PipelineConfig
+from tracker.domain.filings import parse_iso_date
 from tracker.domain.models import TrendStockSignal
 from tracker.domain.portfolio import RiskFilteredSignal, TargetPosition
 from tracker.domain.quarters import parse_report_quarter, quarter_sort_key
@@ -40,7 +41,7 @@ def _serialize_pipeline_config(pipeline: PipelineConfig) -> str:
 
 
 
-def _signal_available_day(quarter: str) -> date:
+def _default_signal_available_day(quarter: str) -> date:
     parsed = parse_report_quarter(quarter)
     if parsed is None:
         raise ValueError(f"Invalid report quarter: {quarter}")
@@ -54,6 +55,19 @@ def _signal_available_day(quarter: str) -> date:
     else:
         quarter_end = date(year, 12, 31)
     return quarter_end + timedelta(days=45)
+
+
+def _signal_available_day(*, store: StateStore, quarter: str) -> date:
+    snapshots = store.list_snapshots_for_quarter(quarter)
+    filing_days = [
+        filed_day
+        for snapshot in snapshots
+        for filed_day in [parse_iso_date(snapshot.filing_date)]
+        if filed_day is not None
+    ]
+    if not filing_days:
+        return _default_signal_available_day(quarter)
+    return max(filing_days) + timedelta(days=1)
 
 
 
@@ -117,8 +131,11 @@ def run_quarterly_pipeline(
 
     risk_signals_by_quarter: dict[str, list[RiskFilteredSignal]] = {}
     positions_by_quarter: dict[str, list[TargetPosition]] = {}
+    signal_available_by_quarter: dict[str, date] = {}
 
     for quarter in quarters:
+        signal_available_day = _signal_available_day(store=store, quarter=quarter)
+        signal_available_by_quarter[quarter] = signal_available_day
         raw_signals: list[TrendStockSignal] = store.list_trend_stock_signals(quarter)
         if not raw_signals:
             risk_signals_by_quarter[quarter] = []
@@ -128,7 +145,7 @@ def run_quarterly_pipeline(
         built = build_risk_filtered_portfolio(
             report_quarter=quarter,
             signals=raw_signals,
-            as_of_trade_date=_signal_available_day(quarter),
+            as_of_trade_date=signal_available_day,
             price_gateway=history_gateway,
             pipeline=pipeline,
             symbol_map_file=symbol_map_file,
@@ -159,6 +176,7 @@ def run_quarterly_pipeline(
 
     backtest = run_walk_forward_backtest(
         quarters=quarters,
+        signal_available_by_quarter=signal_available_by_quarter,
         positions_by_quarter=positions_by_quarter,
         risk_signals_by_quarter=risk_signals_by_quarter,
         price_gateway=history_gateway,

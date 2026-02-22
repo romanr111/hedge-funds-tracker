@@ -144,6 +144,23 @@ def _cagr(returns: list[float]) -> float:
     return pow(equity, 1.0 / years) - 1.0
 
 
+def _beta(strategy_returns: list[float], benchmark_returns: list[float]) -> float | None:
+    if len(strategy_returns) != len(benchmark_returns) or len(strategy_returns) < 2:
+        return None
+    mean_strategy = sum(strategy_returns) / float(len(strategy_returns))
+    mean_benchmark = sum(benchmark_returns) / float(len(benchmark_returns))
+    covariance = 0.0
+    variance_benchmark = 0.0
+    for strategy_return, benchmark_return in zip(strategy_returns, benchmark_returns):
+        ds = strategy_return - mean_strategy
+        db = benchmark_return - mean_benchmark
+        covariance += ds * db
+        variance_benchmark += db * db
+    if variance_benchmark <= 0:
+        return None
+    return covariance / variance_benchmark
+
+
 
 def _portfolio_weights_for_date(
     *,
@@ -176,6 +193,7 @@ def _turnover(prev_weights: dict[str, float], next_weights: dict[str, float]) ->
 def run_walk_forward_backtest(
     *,
     quarters: list[str],
+    signal_available_by_quarter: dict[str, date],
     positions_by_quarter: dict[str, list[TargetPosition]],
     risk_signals_by_quarter: dict[str, list[RiskFilteredSignal]],
     price_gateway: HistoricalPriceGateway,
@@ -185,7 +203,10 @@ def run_walk_forward_backtest(
     if not quarters:
         return WalkForwardResult(status="no_quarters", return_rows=[], overall_kpis=[], quarter_kpis=[])
 
-    benchmark_start = _quarter_end_day(quarters[0]) + timedelta(days=45)
+    benchmark_start = min(
+        signal_available_by_quarter.get(quarter, _quarter_end_day(quarter) + timedelta(days=45))
+        for quarter in quarters
+    )
     benchmark_end = _quarter_end_day(quarters[-1]) + timedelta(days=365)
     benchmark_prices = price_gateway.get_benchmark_series(benchmark_ticker, benchmark_start, benchmark_end)
     benchmark_days = sorted(benchmark_prices.keys())
@@ -194,7 +215,7 @@ def run_walk_forward_backtest(
 
     entries: list[tuple[str, date]] = []
     for quarter in quarters:
-        signal_available_day = _quarter_end_day(quarter) + timedelta(days=45)
+        signal_available_day = signal_available_by_quarter.get(quarter, _quarter_end_day(quarter) + timedelta(days=45))
         entry_day = _next_trading_day(benchmark_days, signal_available_day)
         if entry_day is None:
             continue
@@ -231,6 +252,7 @@ def run_walk_forward_backtest(
     strategy_gross_returns: list[float] = []
     strategy_net_returns: list[float] = []
     benchmark_returns: list[float] = []
+    invested_weights: list[float] = []
 
     for idx in range(1, len(benchmark_days)):
         day = benchmark_days[idx]
@@ -243,6 +265,7 @@ def run_walk_forward_backtest(
             positions_by_quarter=positions_by_quarter,
             hold_quarters=pipeline.hold_quarters,
         )
+        invested_weights.append(sum(current_weights.values()))
 
         gross_return = 0.0
         for ticker, weight in current_weights.items():
@@ -294,12 +317,17 @@ def run_walk_forward_backtest(
     var = sum((item - mean_return) ** 2 for item in strategy_net_returns) / float(len(strategy_net_returns))
     std = math.sqrt(var)
     sharpe = (math.sqrt(252.0) * (mean_return / std)) if std > 0 else 0.0
+    volatility = math.sqrt(252.0) * std
 
     cumulative_strategy = 1.0
     cumulative_benchmark = 1.0
     for strategy_return, benchmark_return in zip(strategy_net_returns, benchmark_returns):
         cumulative_strategy *= 1.0 + strategy_return
         cumulative_benchmark *= 1.0 + benchmark_return
+
+    strategy_cagr = _cagr(strategy_net_returns)
+    strategy_max_drawdown = _max_drawdown(strategy_net_returns)
+    strategy_beta = _beta(strategy_net_returns, benchmark_returns)
 
     overall_kpis = [
         PipelineKPI(metric="cumulative_return", scope="overall", scope_key=None, value=cumulative_strategy - 1.0),
@@ -309,16 +337,33 @@ def run_walk_forward_backtest(
             scope_key=None,
             value=(cumulative_strategy - cumulative_benchmark),
         ),
-        PipelineKPI(metric="cagr", scope="overall", scope_key=None, value=_cagr(strategy_net_returns)),
+        PipelineKPI(metric="cagr", scope="overall", scope_key=None, value=strategy_cagr),
         PipelineKPI(metric="sharpe", scope="overall", scope_key=None, value=sharpe),
-        PipelineKPI(metric="max_drawdown", scope="overall", scope_key=None, value=_max_drawdown(strategy_net_returns)),
+        PipelineKPI(metric="volatility", scope="overall", scope_key=None, value=volatility),
+        PipelineKPI(metric="max_drawdown", scope="overall", scope_key=None, value=strategy_max_drawdown),
+        PipelineKPI(
+            metric="calmar",
+            scope="overall",
+            scope_key=None,
+            value=(strategy_cagr / strategy_max_drawdown if strategy_max_drawdown > 0 else 0.0),
+        ),
         PipelineKPI(metric="turnover", scope="overall", scope_key=None, value=sum(item["turnover"] for item in return_rows)),
+        PipelineKPI(
+            metric="average_invested_weight",
+            scope="overall",
+            scope_key=None,
+            value=(sum(invested_weights) / float(len(invested_weights)) if invested_weights else 0.0),
+        ),
     ]
+    if strategy_beta is not None:
+        overall_kpis.append(PipelineKPI(metric="beta_vs_spy", scope="overall", scope_key=None, value=strategy_beta))
 
     quarter_kpis: list[PipelineKPI] = []
     precision_values: list[float] = []
     hit_values: list[float] = []
     ic_values: list[float] = []
+    coverage_values: list[float] = []
+    quarter_hit_rates: list[tuple[str, float]] = []
 
     for quarter, entry_day in entries:
         exit_day = exit_by_quarter.get(quarter)
@@ -342,14 +387,31 @@ def run_walk_forward_backtest(
             precision = hits / float(total)
             precision_values.append(precision)
             hit_values.append(precision)
+            quarter_hit_rates.append((quarter, precision))
             quarter_kpis.append(PipelineKPI(metric="precision_at_k", scope="quarter", scope_key=quarter, value=precision))
             quarter_kpis.append(PipelineKPI(metric="hit_rate_vs_spy", scope="quarter", scope_key=quarter, value=precision))
 
+        passed_signals = [signal for signal in risk_signals_by_quarter.get(quarter, []) if signal.passed_filters]
+        if passed_signals:
+            covered = 0
+            for signal in passed_signals:
+                stock_return = _return_between(ticker_prices.get(signal.ticker, {}), entry_day, exit_day)
+                if stock_return is not None:
+                    covered += 1
+            coverage_ratio = covered / float(len(passed_signals))
+            coverage_values.append(coverage_ratio)
+            quarter_kpis.append(
+                PipelineKPI(
+                    metric="universe_coverage_ratio",
+                    scope="quarter",
+                    scope_key=quarter,
+                    value=coverage_ratio,
+                )
+            )
+
         scores: list[float] = []
         forward_returns: list[float] = []
-        for signal in risk_signals_by_quarter.get(quarter, []):
-            if not signal.passed_filters:
-                continue
+        for signal in passed_signals:
             stock_return = _return_between(ticker_prices.get(signal.ticker, {}), entry_day, exit_day)
             if stock_return is None:
                 continue
@@ -381,6 +443,37 @@ def run_walk_forward_backtest(
     if ic_values:
         overall_kpis.append(
             PipelineKPI(metric="mean_ic", scope="overall", scope_key=None, value=sum(ic_values) / float(len(ic_values)))
+        )
+    if coverage_values:
+        overall_kpis.append(
+            PipelineKPI(
+                metric="universe_coverage_ratio",
+                scope="overall",
+                scope_key=None,
+                value=sum(coverage_values) / float(len(coverage_values)),
+            )
+        )
+    if quarter_hit_rates:
+        rolling_values: list[float] = []
+        for idx, (quarter, _) in enumerate(quarter_hit_rates):
+            window = quarter_hit_rates[max(0, idx - 3) : idx + 1]
+            rolling = sum(item[1] for item in window) / float(len(window))
+            rolling_values.append(rolling)
+            quarter_kpis.append(
+                PipelineKPI(
+                    metric="rolling_4q_hit_rate",
+                    scope="quarter",
+                    scope_key=quarter,
+                    value=rolling,
+                )
+            )
+        overall_kpis.append(
+            PipelineKPI(
+                metric="rolling_4q_hit_rate",
+                scope="overall",
+                scope_key=None,
+                value=rolling_values[-1],
+            )
         )
 
     return WalkForwardResult(status="ok", return_rows=return_rows, overall_kpis=overall_kpis, quarter_kpis=quarter_kpis)

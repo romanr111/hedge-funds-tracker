@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import tracker.domain.trends as trends_module
 from tracker.application.use_cases.run_trend_engine import (
     _build_top_fingerprint_payload,
     detect_latest_completed_report_quarter,
@@ -746,10 +747,87 @@ def test_confidence_gets_bonus_from_high_conviction_directional_weight() -> None
     assert boosted > baseline
 
 
+def test_confidence_magnitude_mixes_np_and_blended_components() -> None:
+    np_only = _confidence_score(
+        direction="BUY",
+        directional_weight=0.20,
+        opposite_weight=0.02,
+        directional_managers=4,
+        opposite_managers=1,
+        crowding_hhi=0.22,
+        directional_persistence=2,
+        min_managers=3,
+        min_weight=0.10,
+        magnitude_value=0.01,
+        magnitude_scale=0.05,
+    )
+    mixed = _confidence_score(
+        direction="BUY",
+        directional_weight=0.20,
+        opposite_weight=0.02,
+        directional_managers=4,
+        opposite_managers=1,
+        crowding_hhi=0.22,
+        directional_persistence=2,
+        min_managers=3,
+        min_weight=0.10,
+        magnitude_value=0.01,
+        magnitude_scale=0.05,
+        blended_magnitude_value=0.05,
+        blended_magnitude_scale=0.05,
+    )
+    assert mixed > np_only
+
+
 def test_price_freshness_multiplier_reduces_confidence_on_large_drift() -> None:
     assert _price_freshness_multiplier(100.0, 104.0) == pytest.approx(1.0)
     assert _price_freshness_multiplier(100.0, 120.0) < 1.0
     assert _price_freshness_multiplier(100.0, 1000.0) == pytest.approx(0.35)
+
+
+def test_compute_trend_signals_passes_blended_magnitude_inputs_to_confidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quarters = ["2025Q3", "2025Q4"]
+    snapshots_by_quarter = {
+        "2025Q3": {
+            "0000000001": _snapshot_for_compute(
+                cik="0000000001",
+                quarter="2025Q3",
+                alpha_value=100,
+                beta_value=900,
+            )
+        },
+        "2025Q4": {
+            "0000000001": _snapshot_for_compute(
+                cik="0000000001",
+                quarter="2025Q4",
+                alpha_value=300,
+                beta_value=700,
+            )
+        },
+    }
+    manager_weights = {"0000000001": 1.0}
+
+    captured: list[tuple[float | None, float | None]] = []
+    original_confidence_score = trends_module._confidence_score
+
+    def _confidence_score_spy(**kwargs):
+        captured.append((kwargs.get("blended_magnitude_value"), kwargs.get("blended_magnitude_scale")))
+        return original_confidence_score(**kwargs)
+
+    monkeypatch.setattr(trends_module, "_confidence_score", _confidence_score_spy)
+
+    compute_trend_signals(
+        quarters=quarters,
+        snapshots_by_quarter=snapshots_by_quarter,
+        manager_weights=manager_weights,
+        blend_mode="tactical",
+    )
+
+    assert captured
+    assert all(scale is not None and scale > 0 for _, scale in captured)
+    assert any(value is not None and abs(value) > 0 for value, _ in captured)
 
 
 def test_trade_flow_delta_uses_shares_direction_when_available() -> None:
