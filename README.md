@@ -36,6 +36,8 @@ Optional:
 - `NOTIFIERS` (comma-separated, e.g. `telegram`)
 - `SEC_RATE_LIMIT_PER_SEC` (requests/sec, must be <= 10; default 5)
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
+- `TREND_BLEND_MODE` (`tactical` by default; also supports `portfolio`)
+- `TREND_LIVE_PRICES_SYMBOLS_FILE` (symbol map for live price fetch from `stooq`, default `config/cusip_tickers.json`)
 
 Paths in `.env` may be relative to the repo root.
 For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
@@ -96,6 +98,8 @@ python -m tracker --help
 python -m tracker --notify_on_first_start
 python -m tracker --notify_on_first_start clean_state
 python -m tracker --dry-run
+python -m tracker --force-trend-recompute
+python -m tracker --show-trends-detailed
 python -m tracker --test-notification
 ```
 
@@ -112,9 +116,27 @@ Flag reference:
   Executes SEC polling and diff logic, NO notifications, no DB writing.
   Useful for safe validation and troubleshooting.
   Cannot be combined with `clean_state`.
+- `--force-trend-recompute`
+  Forces trend engine recalculation even when fingerprints are unchanged (bypasses `skipped_no_new_completed_quarter`
+  and `skipped_no_top_change` short-circuit paths).
+- `--show-trends-detailed`
+  Prints a detailed trends table after the run (same style as `scripts/show_trends.py`).
+  Related options:
+  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
+- `--trend-live-prices-symbols-file`
+  JSON map used for live prices from `stooq` (key: CUSIP/instrument_key, value: ticker),
+  default `config/cusip_tickers.json`.
 - `--test-notification`
   Sends a test notification immediately through configured notifiers and exits.
   Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
+
+Interactive UX note:
+- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints a compact
+  Top Buy / Top Sell table at the end of the run.
+- For explicit, full table output with symbols and filters, use either:
+  `python -m tracker --show-trends-detailed`
+  or
+  `python scripts/show_trends.py --db <DB_PATH> --quarter <YYYYQn>`
 
 State viewer utility:
 ```bash

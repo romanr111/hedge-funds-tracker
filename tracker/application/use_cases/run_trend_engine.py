@@ -14,7 +14,7 @@ from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 WINDOW_QUARTERS = 4
-TREND_ENGINE_VERSION = "v1.3"
+TREND_ENGINE_VERSION = "v1.4"
 
 
 class _WeightedManagerLike(Protocol):
@@ -56,7 +56,13 @@ def _build_input_fingerprint_payload(
     snapshots: list[ManagerQuarterSnapshot],
     *,
     blend_mode: str,
+    latest_prices: dict[str, float] | None,
 ) -> dict[str, object]:
+    latest_prices_payload = {
+        key.strip().upper(): round(float(value), 8)
+        for key, value in (latest_prices or {}).items()
+        if isinstance(key, str) and isinstance(value, (int, float)) and float(value) > 0
+    }
     payload: list[dict[str, str | None]] = []
     for snapshot in sorted(snapshots, key=lambda item: (item.report_quarter, item.cik)):
         payload.append(
@@ -72,8 +78,27 @@ def _build_input_fingerprint_payload(
     return {
         "engine_version": TREND_ENGINE_VERSION,
         "blend_mode": blend_mode,
+        "latest_prices": latest_prices_payload,
         "snapshots": payload,
     }
+
+
+def _sanitize_latest_prices(latest_prices: dict[str, float] | None) -> dict[str, float] | None:
+    if not latest_prices:
+        return None
+    normalized: dict[str, float] = {}
+    for raw_key, raw_price in latest_prices.items():
+        if not isinstance(raw_key, str):
+            continue
+        if not isinstance(raw_price, (int, float)):
+            continue
+        value = float(raw_price)
+        if value <= 0:
+            continue
+        key = raw_key.strip().upper()
+        if key:
+            normalized[key] = value
+    return normalized or None
 
 
 def _build_top_fingerprint_payload(signals: list[TrendSignalRow], *, limit: int = 20) -> dict[str, list[str]]:
@@ -107,9 +132,12 @@ def run_trend_engine_for_latest_completed_quarter(
     *,
     dry_run: bool,
     blend_mode: str = "tactical",
+    latest_prices: dict[str, float] | None = None,
+    force_recompute: bool = False,
     logger: logging.Logger | None = None,
 ) -> TrendEngineResult:
     app_logger = logger or logging.getLogger(__name__)
+    resolved_latest_prices = _sanitize_latest_prices(latest_prices)
     if dry_run:
         return TrendEngineResult(status="dry_run", report_quarter=None, signals_count=0)
     if not managers:
@@ -150,11 +178,13 @@ def run_trend_engine_for_latest_completed_quarter(
                     signals_count=0,
                 )
 
-    input_fingerprint = _fingerprint(_build_input_fingerprint_payload(snapshots, blend_mode=blend_mode))
+    input_fingerprint = _fingerprint(
+        _build_input_fingerprint_payload(snapshots, blend_mode=blend_mode, latest_prices=resolved_latest_prices)
+    )
     previous_run = store.get_trend_run(target_quarter)
     now_iso = datetime.now(timezone.utc).isoformat()
 
-    if previous_run and previous_run.input_fingerprint == input_fingerprint:
+    if not force_recompute and previous_run and previous_run.input_fingerprint == input_fingerprint:
         latest_trend_run_quarter = store.get_latest_trend_run_quarter()
         status = (
             "skipped_no_new_completed_quarter"
@@ -177,11 +207,17 @@ def run_trend_engine_for_latest_completed_quarter(
         snapshots_by_quarter=snapshots_by_quarter,
         manager_weights=manager_weights,
         blend_mode=blend_mode,
+        latest_prices=resolved_latest_prices,
     )
 
     top_payload = _build_top_fingerprint_payload(computed.signals)
     top_fingerprint = _fingerprint(top_payload)
-    if previous_run and previous_run.top_fingerprint == top_fingerprint:
+    if (
+        not force_recompute
+        and resolved_latest_prices is None
+        and previous_run
+        and previous_run.top_fingerprint == top_fingerprint
+    ):
         store.upsert_trend_run(
             report_quarter=target_quarter,
             input_fingerprint=input_fingerprint,
@@ -217,6 +253,8 @@ def run_trend_engine_for_latest_completed_quarter(
             regime=row.regime,
             contributors_json=json.dumps(row.contributors, separators=(",", ":"), ensure_ascii=True),
             computed_at=now_iso,
+            freshness_multiplier=row.freshness_multiplier,
+            freshness_ok=row.freshness_ok,
         )
         for row in computed.signals
     ]

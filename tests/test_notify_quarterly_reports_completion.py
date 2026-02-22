@@ -83,8 +83,8 @@ def test_all_managers_with_current_quarter_reports_send_notification() -> None:
     ]
     store = _Store(
         {
-            "1": _state("1", "Fund A", "2026-01-15"),
-            "2": _state("2", "Fund B", "2026-03-01"),
+            "1": _state("1", "Fund A", "2025-10-15"),
+            "2": _state("2", "Fund B", "2025-12-31"),
         }
     )
     notifier = _CapturingNotifier()
@@ -99,11 +99,11 @@ def test_all_managers_with_current_quarter_reports_send_notification() -> None:
 
     assert len(notifier.sent) == 1
     subject, body = notifier.sent[0]
-    assert subject == "✅ All tracked funds reported for Q1 2026"
-    assert "All tracked funds (2) have published 13F reports for Q1 2026." in body
+    assert subject == "✅ All tracked funds reported for Q4 2025"
+    assert "All tracked funds (2) have published 13F reports for Q4 2025." in body
     assert len(store.upserts) == 1
     assert store.upserts[0]["cik"] == QUARTERLY_COMPLETION_STATE_CIK
-    assert store.upserts[0]["last_notified_accession"] == "Q1 2026"
+    assert store.upserts[0]["last_notified_accession"] == "Q4 2025"
 
 
 def test_missing_current_quarter_report_skips_notification() -> None:
@@ -113,8 +113,8 @@ def test_missing_current_quarter_report_skips_notification() -> None:
     ]
     store = _Store(
         {
-            "1": _state("1", "Fund A", "2026-01-15"),
-            "2": _state("2", "Fund B", "2025-12-31"),
+            "1": _state("1", "Fund A", "2025-10-15"),
+            "2": _state("2", "Fund B", "2025-09-30"),
         }
     )
     notifier = _CapturingNotifier()
@@ -138,13 +138,13 @@ def test_already_notified_for_current_quarter_skips_duplicate() -> None:
     ]
     store = _Store(
         {
-            "1": _state("1", "Fund A", "2026-01-15"),
-            "2": _state("2", "Fund B", "2026-03-01"),
+            "1": _state("1", "Fund A", "2025-10-15"),
+            "2": _state("2", "Fund B", "2025-12-31"),
             QUARTERLY_COMPLETION_STATE_CIK: _state(
                 QUARTERLY_COMPLETION_STATE_CIK,
                 "system",
                 "2026-02-20",
-                last_notified_accession="Q1 2026",
+                last_notified_accession="Q4 2025",
             ),
         }
     )
