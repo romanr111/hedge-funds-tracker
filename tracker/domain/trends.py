@@ -467,7 +467,7 @@ def _confidence_score(
         else 0.0
     )
     boosted_confidence = _clip(base_confidence + (HIGH_CONVICTION_CONFIDENCE_BONUS * high_conviction_ratio), 0.0, 1.0)
-    disagreement = min(1.0, opposite_weight / max(MAD_EPS, directional_weight))
+    disagreement = _clip(opposite_weight / max(MAD_EPS, directional_weight + opposite_weight), 0.0, 1.0)
     directional_confidence = _clip(boosted_confidence * (1.0 - (DISAGREEMENT_GAMMA * disagreement)), 0.0, 1.0)
     freshness = _clip(freshness_multiplier, 0.0, 1.0)
     return _clip(directional_confidence * freshness, 0.0, 1.0)
