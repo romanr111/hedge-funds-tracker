@@ -19,18 +19,25 @@ def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: s
         notifier.send(subject, body)
 
 
-def _quarter_label(day: date) -> str:
-    quarter = ((day.month - 1) // 3) + 1
-    return f"Q{quarter} {day.year}"
+def _quarter_label_from_year_quarter(year: int, quarter: int) -> str:
+    return f"Q{quarter} {year}"
 
 
-def _is_in_same_quarter(report_date: str | None, *, day: date) -> bool:
+def _previous_report_quarter(day: date) -> tuple[int, int]:
+    current_quarter = ((day.month - 1) // 3) + 1
+    if current_quarter == 1:
+        return (day.year - 1, 4)
+    return (day.year, current_quarter - 1)
+
+
+def _is_in_target_quarter(report_date: str | None, *, year: int, quarter: int) -> bool:
     report_day = parse_iso_date(report_date)
     if report_day is None:
         return False
+    report_quarter = ((report_day.month - 1) // 3) + 1
     return (
-        report_day.year == day.year
-        and ((report_day.month - 1) // 3) == ((day.month - 1) // 3)
+        report_day.year == year
+        and report_quarter == quarter
     )
 
 
@@ -48,10 +55,15 @@ def notify_if_all_reports_published_for_current_quarter(
         return
 
     today = now_fn().date()
-    quarter_label = _quarter_label(today)
+    target_year, target_quarter = _previous_report_quarter(today)
+    quarter_label = _quarter_label_from_year_quarter(target_year, target_quarter)
     for manager in managers:
         manager_state = store.get_state(manager.cik)
-        if manager_state is None or not _is_in_same_quarter(manager_state.last_report_date, day=today):
+        if manager_state is None or not _is_in_target_quarter(
+            manager_state.last_report_date,
+            year=target_year,
+            quarter=target_quarter,
+        ):
             app_logger.info(
                 "Quarterly reports completion status",
                 extra={

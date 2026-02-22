@@ -8,6 +8,8 @@ from typing import Any
 
 from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
+SELL_TABLE_MIN_CONF = 0.35
+
 
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [len(header) for header in headers]
@@ -89,17 +91,24 @@ def _action_for_signal(signal: Any) -> str:
     confidence = float(signal.confidence)
     if regime == "STRONG_BUY" and confidence >= 0.65:
         return "ACTION_BUY"
-    if regime in {"REVERSAL_BUY", "EMERGING_BUY"} and confidence >= 0.50:
+    if regime in {"REVERSAL_BUY", "EMERGING_BUY"} and confidence >= 0.45:
         return "WATCH_BUY"
     if regime == "WEAKENING_BUY":
         return "WEAKENING_BUY"
     if regime == "STRONG_SELL" and confidence >= 0.65:
         return "ACTION_SELL"
-    if regime in {"REVERSAL_SELL", "EMERGING_SELL"} and confidence >= 0.50:
+    if regime in {"REVERSAL_SELL", "EMERGING_SELL"} and confidence >= SELL_TABLE_MIN_CONF:
         return "WATCH_SELL"
     if regime == "WEAKENING_SELL":
         return "WEAKENING_SELL"
     return "MONITOR"
+
+
+def _freshness_icon(signal: Any) -> str:
+    freshness_ok = getattr(signal, "freshness_ok", None)
+    if freshness_ok is None:
+        return "-"
+    return "✅" if bool(freshness_ok) else "❌"
 
 
 def main() -> int:
@@ -110,8 +119,8 @@ def main() -> int:
     parser.add_argument(
         "--min-conf",
         type=float,
-        default=0.5,
-        help="Minimum confidence threshold for displayed signals (default: 0.5).",
+        default=0.45,
+        help="Buy/reversal confidence threshold (default: 0.45; sells use min(threshold, 0.35)).",
     )
     parser.add_argument(
         "--show-reversals",
@@ -158,11 +167,12 @@ def main() -> int:
             key=lambda item: item.trend_ewma,
             reverse=True,
         )[: args.limit]
+        sell_min_conf = min(args.min_conf, SELL_TABLE_MIN_CONF)
         sell = sorted(
             [
                 item
                 for item in signals
-                if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= args.min_conf
+                if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
             ],
             key=lambda item: item.trend_ewma,
         )[: args.limit]
@@ -192,8 +202,12 @@ def main() -> int:
             "issuer",
             "top contributor",
         ]
-        buy_rows = [
-            [
+        freshness_enabled = any(getattr(item, "freshness_ok", None) is not None for item in signals)
+        if freshness_enabled:
+            headers.append("freshness indicator")
+
+        def _row(item: Any) -> list[str]:
+            row = [
                 _action_for_signal(item),
                 _ticker_for_signal(item, symbol_map),
                 item.regime,
@@ -206,38 +220,20 @@ def main() -> int:
                 item.issuer_name or "-",
                 _contributors_preview(item.contributors_json),
             ]
+            if freshness_enabled:
+                row.append(_freshness_icon(item))
+            return row
+
+        buy_rows = [
+            _row(item)
             for item in buy
         ]
         sell_rows = [
-            [
-                _action_for_signal(item),
-                _ticker_for_signal(item, symbol_map),
-                item.regime,
-                f"{item.trend_ewma:.6f}",
-                f"{item.trend_delta:.6f}",
-                f"{item.impulse_score:.6f}",
-                f"{item.accumulation_score:.6f}",
-                f"{item.confidence:.3f}",
-                f"{item.buy_managers}/{item.sell_managers}",
-                item.issuer_name or "-",
-                _contributors_preview(item.contributors_json),
-            ]
+            _row(item)
             for item in sell
         ]
         reversal_rows = [
-            [
-                _action_for_signal(item),
-                _ticker_for_signal(item, symbol_map),
-                item.regime,
-                f"{item.trend_ewma:.6f}",
-                f"{item.trend_delta:.6f}",
-                f"{item.impulse_score:.6f}",
-                f"{item.accumulation_score:.6f}",
-                f"{item.confidence:.3f}",
-                f"{item.buy_managers}/{item.sell_managers}",
-                item.issuer_name or "-",
-                _contributors_preview(item.contributors_json),
-            ]
+            _row(item)
             for item in reversals
         ]
 

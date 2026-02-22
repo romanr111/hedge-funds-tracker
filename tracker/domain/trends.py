@@ -10,6 +10,9 @@ from tracker.domain.models import ManagerQuarterSnapshot, Position
 
 MIN_POSITION_WEIGHT = 0.015
 MAX_POSITION_WEIGHT_FULL_SIGNAL = 0.05
+HIGH_CONVICTION_POSITION_WEIGHT_THRESHOLD = 0.05
+SHARES_CORPORATE_ACTION_CHANGE_THRESHOLD = 0.20
+CORPORATE_ACTION_WEIGHT_DELTA_MAX = 0.02
 Z_CLIP = 5.0
 Z_SCALE = 2.0
 MAD_EPS = 1e-6
@@ -24,9 +27,9 @@ BLEND_WEIGHTS: dict[str, tuple[float, float]] = {
     BLEND_PORTFOLIO: (0.35, 0.65),
 }
 
-BREADTH_MIN_MANAGERS_BASE = 3
+BREADTH_MIN_MANAGERS_BASE = 2
 BREADTH_MANAGERS_RATIO = 0.08
-BREADTH_WEIGHT_BASE = 0.10
+BREADTH_WEIGHT_BASE = 0.06
 BREADTH_WEIGHT_MAX = 0.15
 BREADTH_WEIGHT_STEP_START = 20
 BREADTH_WEIGHT_STEP = 0.001
@@ -47,6 +50,11 @@ MIN_HHI_PARTICIPANTS_FOR_PENALTY = 3
 DISAGREEMENT_GAMMA = 0.70
 MAGNITUDE_FALLBACK_SCALE = 0.08
 MAGNITUDE_QUARTER_PERCENTILE = 0.90
+
+PRICE_DRIFT_TOLERANCE = 0.15
+PRICE_DRIFT_DECAY_SCALE = 0.35
+FRESHNESS_MULTIPLIER_MIN = 0.35
+HIGH_CONVICTION_CONFIDENCE_BONUS = 0.08
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,8 @@ class TrendSignalRow:
     persistence_sell: int
     regime: str
     contributors: list[dict[str, Any]]
+    freshness_multiplier: float = 1.0
+    freshness_ok: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -90,6 +100,9 @@ class _TradeRecord:
     prev_weight: float
     curr_weight: float
     max_weight: float
+    prev_shares: int
+    curr_shares: int
+    quarter_price: float | None
     metadata: dict[str, str | None]
 
 
@@ -100,10 +113,15 @@ class _ManagerContribution:
     manager_weight_base: float
     manager_quality_multiplier: float
     manager_weight_effective: float
+    flow_participation: float
     signal_value: float
     trade_dw: float
     prev_weight: float
     curr_weight: float
+    prev_shares: int
+    curr_shares: int
+    quarter_price: float | None
+    price_weight: float
 
 
 @dataclass(frozen=True)
@@ -112,8 +130,11 @@ class _QuarterInstrumentMetric:
     np_raw: float
     np_adj: float
     np_impulse_adj: float
+    quarter_avg_price: float | None
     breadth_buy_weight: float
     breadth_sell_weight: float
+    high_conviction_buy_weight: float
+    high_conviction_sell_weight: float
     buy_managers: int
     sell_managers: int
     crowding_hhi: float
@@ -188,6 +209,7 @@ def aggregate_positions_by_instrument(positions: list[Position]) -> list[Positio
 def _weights_by_instrument(snapshot: ManagerQuarterSnapshot) -> dict[str, dict[str, Any]]:
     total_value = 0
     values: dict[str, int] = {}
+    shares_by_key: dict[str, int] = {}
     metadata: dict[str, dict[str, str | None]] = {}
 
     for position in snapshot.positions:
@@ -197,10 +219,13 @@ def _weights_by_instrument(snapshot: ManagerQuarterSnapshot) -> dict[str, dict[s
         put_call = _clean_optional_str(position.get("put_call"))
         key = instrument_key(cusip, put_call)
         value = position.get("value")
+        shares = position.get("shares")
         if not isinstance(value, int) or value <= 0:
             continue
         values[key] = values.get(key, 0) + value
         total_value += value
+        if isinstance(shares, int) and shares > 0:
+            shares_by_key[key] = shares_by_key.get(key, 0) + shares
         if key not in metadata:
             metadata[key] = {
                 "cusip": cusip,
@@ -214,12 +239,47 @@ def _weights_by_instrument(snapshot: ManagerQuarterSnapshot) -> dict[str, dict[s
 
     weighted: dict[str, dict[str, Any]] = {}
     for key, value in values.items():
+        shares_total = shares_by_key.get(key, 0)
+        quarter_price = (float(value) / float(shares_total)) if shares_total > 0 else None
         weighted[key] = {
             "value": value,
             "weight": float(value) / float(total_value),
+            "shares": shares_total,
+            "quarter_price": quarter_price,
             "metadata": metadata[key],
         }
     return weighted
+
+
+def _trade_flow_delta(*, prev_weight: float, curr_weight: float, prev_shares: int, curr_shares: int) -> float:
+    max_weight = max(prev_weight, curr_weight)
+    if max_weight <= 0:
+        return 0.0
+    weight_delta = curr_weight - prev_weight
+    if prev_shares > 0 or curr_shares > 0:
+        if prev_shares > 0:
+            shares_change_ratio = (float(curr_shares) - float(prev_shares)) / float(prev_shares)
+        elif curr_shares > 0:
+            shares_change_ratio = 1.0
+        else:
+            shares_change_ratio = 0.0
+        if abs(shares_change_ratio) < MAD_EPS:
+            return 0.0
+        # Guard against stock split / share denomination effects that can
+        # change shares strongly with near-flat portfolio weight.
+        if (
+            abs(shares_change_ratio) >= SHARES_CORPORATE_ACTION_CHANGE_THRESHOLD
+            and abs(weight_delta) <= CORPORATE_ACTION_WEIGHT_DELTA_MAX
+        ):
+            return weight_delta
+        return max_weight * shares_change_ratio
+    return weight_delta
+
+
+def _trade_participation(*, trade_dw: float, max_weight: float) -> float:
+    if max_weight <= 0:
+        return 0.0
+    return _clip(abs(trade_dw) / max(MAD_EPS, max_weight), 0.0, 1.0)
 
 
 def _robust_sigma(values: list[float]) -> float:
@@ -383,6 +443,8 @@ def _confidence_score(
     min_weight: float,
     magnitude_value: float,
     magnitude_scale: float,
+    directional_high_conviction_weight: float = 0.0,
+    freshness_multiplier: float = 1.0,
 ) -> float:
     del direction  # explicit for callsite readability
     breadth_count_score = min(1.0, directional_managers / max(1, min_managers))
@@ -399,8 +461,81 @@ def _confidence_score(
 
     base = (0.40 * breadth_score) + (0.25 * persistence_score) + (0.20 * crowding_score) + (0.15 * magnitude_score)
     base_confidence = _clip(base, 0.0, 1.0)
+    high_conviction_ratio = (
+        min(1.0, directional_high_conviction_weight / max(MAD_EPS, directional_weight))
+        if directional_weight > 0 and directional_high_conviction_weight > 0
+        else 0.0
+    )
+    boosted_confidence = _clip(base_confidence + (HIGH_CONVICTION_CONFIDENCE_BONUS * high_conviction_ratio), 0.0, 1.0)
     disagreement = min(1.0, opposite_weight / max(MAD_EPS, directional_weight))
-    return _clip(base_confidence * (1.0 - (DISAGREEMENT_GAMMA * disagreement)), 0.0, 1.0)
+    directional_confidence = _clip(boosted_confidence * (1.0 - (DISAGREEMENT_GAMMA * disagreement)), 0.0, 1.0)
+    freshness = _clip(freshness_multiplier, 0.0, 1.0)
+    return _clip(directional_confidence * freshness, 0.0, 1.0)
+
+
+def _normalize_latest_prices(latest_prices: dict[str, float] | None) -> dict[str, float]:
+    if not latest_prices:
+        return {}
+    normalized: dict[str, float] = {}
+    for raw_key, raw_price in latest_prices.items():
+        if not isinstance(raw_key, str):
+            continue
+        if not isinstance(raw_price, (int, float)):
+            continue
+        price = float(raw_price)
+        if not math.isfinite(price) or price <= 0:
+            continue
+        key = raw_key.strip().upper()
+        if key:
+            normalized[key] = price
+    return normalized
+
+
+def _resolve_latest_price(
+    *,
+    instrument_key: str,
+    metadata: dict[str, str | None],
+    latest_prices: dict[str, float],
+) -> float | None:
+    if not latest_prices:
+        return None
+    cusip = (metadata.get("cusip") or "").strip().upper()
+    put_call = (metadata.get("put_call") or "").strip().upper()
+    instrument = instrument_key.strip().upper()
+    keys: list[str] = []
+    if instrument:
+        keys.append(instrument)
+    if cusip and put_call:
+        keys.append(f"{cusip}|{put_call}")
+    if cusip:
+        keys.append(cusip)
+    for key in keys:
+        value = latest_prices.get(key)
+        if value is not None:
+            return float(value)
+    return None
+
+
+def _price_freshness_multiplier(reference_price: float | None, latest_price: float | None) -> float:
+    if reference_price is None or latest_price is None:
+        return 1.0
+    if reference_price <= 0 or latest_price <= 0:
+        return 1.0
+    drift_ratio = abs(latest_price - reference_price) / max(MAD_EPS, reference_price)
+    effective_drift = max(0.0, drift_ratio - PRICE_DRIFT_TOLERANCE)
+    if effective_drift <= 0:
+        return 1.0
+    decayed = math.exp(-(effective_drift / PRICE_DRIFT_DECAY_SCALE))
+    return _clip(decayed, FRESHNESS_MULTIPLIER_MIN, 1.0)
+
+
+def _is_strong_price_drift(reference_price: float | None, latest_price: float | None) -> bool | None:
+    if reference_price is None or latest_price is None:
+        return None
+    if reference_price <= 0 or latest_price <= 0:
+        return None
+    drift_ratio = abs(latest_price - reference_price) / max(MAD_EPS, reference_price)
+    return drift_ratio > PRICE_DRIFT_TOLERANCE
 
 
 def _compute_quarter_metrics(
@@ -436,14 +571,39 @@ def _compute_quarter_metrics(
             max_weight = max(prev_weight, curr_weight)
             if max_weight < MIN_POSITION_WEIGHT:
                 continue
+            prev_shares_raw = prev_weights.get(key, {}).get("shares")
+            curr_shares_raw = curr_weights.get(key, {}).get("shares")
+            prev_shares = int(prev_shares_raw) if isinstance(prev_shares_raw, int) and prev_shares_raw > 0 else 0
+            curr_shares = int(curr_shares_raw) if isinstance(curr_shares_raw, int) and curr_shares_raw > 0 else 0
+            prev_quarter_price_raw = prev_weights.get(key, {}).get("quarter_price")
+            curr_quarter_price_raw = curr_weights.get(key, {}).get("quarter_price")
+            prev_quarter_price = (
+                float(prev_quarter_price_raw)
+                if isinstance(prev_quarter_price_raw, (int, float)) and prev_quarter_price_raw > 0
+                else None
+            )
+            curr_quarter_price = (
+                float(curr_quarter_price_raw)
+                if isinstance(curr_quarter_price_raw, (int, float)) and curr_quarter_price_raw > 0
+                else None
+            )
+            quarter_price = curr_quarter_price if curr_quarter_price is not None else prev_quarter_price
             metadata = dict(curr_weights.get(key, {}).get("metadata", prev_weights.get(key, {}).get("metadata", {})))
             trade_records.append(
                 _TradeRecord(
                     instrument_key=key,
-                    trade_dw=curr_weight - prev_weight,
+                    trade_dw=_trade_flow_delta(
+                        prev_weight=prev_weight,
+                        curr_weight=curr_weight,
+                        prev_shares=prev_shares,
+                        curr_shares=curr_shares,
+                    ),
                     prev_weight=prev_weight,
                     curr_weight=curr_weight,
                     max_weight=max_weight,
+                    prev_shares=prev_shares,
+                    curr_shares=curr_shares,
+                    quarter_price=quarter_price,
                     metadata=metadata,
                 )
             )
@@ -452,17 +612,24 @@ def _compute_quarter_metrics(
         for record in trade_records:
             z_score = _clip(record.trade_dw / sigma, -Z_CLIP, Z_CLIP)
             position_weight = _position_signal_weight(record.max_weight)
-            signal_value = manager_weight_effective * position_weight * math.tanh(z_score / Z_SCALE)
+            flow_participation = _trade_participation(trade_dw=record.trade_dw, max_weight=record.max_weight)
+            signal_value = manager_weight_effective * position_weight * flow_participation * math.tanh(z_score / Z_SCALE)
+            price_weight = manager_weight_effective * record.max_weight
             contribution = _ManagerContribution(
                 manager_cik=manager_cik,
                 manager_name=curr_snapshot.manager_name,
                 manager_weight_base=manager_weight_base,
                 manager_quality_multiplier=manager_quality_multiplier,
                 manager_weight_effective=manager_weight_effective,
+                flow_participation=flow_participation,
                 signal_value=signal_value,
                 trade_dw=record.trade_dw,
                 prev_weight=record.prev_weight,
                 curr_weight=record.curr_weight,
+                prev_shares=record.prev_shares,
+                curr_shares=record.curr_shares,
+                quarter_price=record.quarter_price,
+                price_weight=price_weight,
             )
             by_instrument.setdefault(record.instrument_key, []).append(contribution)
             if record.instrument_key not in metadata_by_instrument:
@@ -475,8 +642,22 @@ def _compute_quarter_metrics(
         for item in contributions:
             impulse_mult = _entry_impulse_multiplier(item.prev_weight, item.curr_weight)
             np_impulse_raw += item.signal_value * impulse_mult
-        breadth_buy_weight = sum(item.manager_weight_effective for item in contributions if item.signal_value > 0)
-        breadth_sell_weight = sum(item.manager_weight_effective for item in contributions if item.signal_value < 0)
+        breadth_buy_weight = sum(
+            item.manager_weight_effective * item.flow_participation for item in contributions if item.signal_value > 0
+        )
+        breadth_sell_weight = sum(
+            item.manager_weight_effective * item.flow_participation for item in contributions if item.signal_value < 0
+        )
+        high_conviction_buy_weight = sum(
+            item.manager_weight_effective * item.flow_participation
+            for item in contributions
+            if item.signal_value > 0 and max(item.prev_weight, item.curr_weight) > HIGH_CONVICTION_POSITION_WEIGHT_THRESHOLD
+        )
+        high_conviction_sell_weight = sum(
+            item.manager_weight_effective * item.flow_participation
+            for item in contributions
+            if item.signal_value < 0 and max(item.prev_weight, item.curr_weight) > HIGH_CONVICTION_POSITION_WEIGHT_THRESHOLD
+        )
         buy_managers = sum(1 for item in contributions if item.signal_value > 0)
         sell_managers = sum(1 for item in contributions if item.signal_value < 0)
         abs_total = sum(abs(item.signal_value) for item in contributions)
@@ -484,6 +665,16 @@ def _compute_quarter_metrics(
             crowding_hhi = sum((abs(item.signal_value) / abs_total) ** 2 for item in contributions)
         else:
             crowding_hhi = 0.0
+        price_numerator = 0.0
+        price_denominator = 0.0
+        for item in contributions:
+            if item.quarter_price is None or item.quarter_price <= 0:
+                continue
+            if item.price_weight <= 0:
+                continue
+            price_numerator += item.quarter_price * item.price_weight
+            price_denominator += item.price_weight
+        quarter_avg_price = (price_numerator / price_denominator) if price_denominator > 0 else None
         # Keep NP unpenalized and apply crowding only in confidence.
         np_adj = np_raw
         np_impulse_adj = np_impulse_raw
@@ -496,11 +687,16 @@ def _compute_quarter_metrics(
                 "manager_weight_base": round(item.manager_weight_base, 8),
                 "manager_quality_multiplier": round(item.manager_quality_multiplier, 8),
                 "manager_weight_effective": round(item.manager_weight_effective, 8),
+                "flow_participation": round(item.flow_participation, 8),
                 "signal_value": round(item.signal_value, 8),
                 "trade_dw": round(item.trade_dw, 8),
                 "prev_weight": round(item.prev_weight, 8),
                 "curr_weight": round(item.curr_weight, 8),
+                "prev_shares": item.prev_shares,
+                "curr_shares": item.curr_shares,
                 "impulse_multiplier": round(_entry_impulse_multiplier(item.prev_weight, item.curr_weight), 8),
+                "quarter_price": round(item.quarter_price, 8) if item.quarter_price is not None else None,
+                "price_weight": round(item.price_weight, 8),
             }
             for item in top_contributors
         ]
@@ -510,8 +706,11 @@ def _compute_quarter_metrics(
             np_raw=np_raw,
             np_adj=np_adj,
             np_impulse_adj=np_impulse_adj,
+            quarter_avg_price=quarter_avg_price,
             breadth_buy_weight=breadth_buy_weight,
             breadth_sell_weight=breadth_sell_weight,
+            high_conviction_buy_weight=high_conviction_buy_weight,
+            high_conviction_sell_weight=high_conviction_sell_weight,
             buy_managers=buy_managers,
             sell_managers=sell_managers,
             crowding_hhi=crowding_hhi,
@@ -563,6 +762,7 @@ def compute_trend_signals(
     manager_weights: dict[str, float],
     blend_mode: Literal["tactical", "portfolio"] = BLEND_TACTICAL,
     contributor_limit: int = 5,
+    latest_prices: dict[str, float] | None = None,
 ) -> TrendComputationResult:
     if len(quarters) < 2:
         raise ValueError("At least 2 quarters are required to compute trend signals.")
@@ -600,6 +800,7 @@ def compute_trend_signals(
 
     impulse_decay = math.exp(math.log(0.5) / IMPULSE_HALFLIFE_QUARTERS)
     accumulation_decay = math.exp(math.log(0.5) / ACCUMULATION_HALFLIFE_QUARTERS)
+    normalized_latest_prices = _normalize_latest_prices(latest_prices)
     state_by_instrument: dict[str, _InstrumentState] = {}
     final_rows: dict[str, TrendSignalRow] = {}
 
@@ -644,6 +845,7 @@ def compute_trend_signals(
             sell_managers = metric.sell_managers if metric else 0
             crowding_hhi = metric.crowding_hhi if metric else 0.0
             contributors = metric.contributors if metric else []
+            metadata = metric.metadata if metric else previous_state.metadata
 
             buy_gate = buy_managers >= breadth_min_managers or breadth_buy_weight >= breadth_min_weight
             sell_gate = sell_managers >= breadth_min_managers or breadth_sell_weight >= breadth_min_weight
@@ -663,15 +865,26 @@ def compute_trend_signals(
             if direction == "BUY":
                 directional_weight = breadth_buy_weight
                 opposite_weight = breadth_sell_weight
+                directional_high_conviction_weight = metric.high_conviction_buy_weight if metric else 0.0
                 directional_managers = buy_managers
                 opposite_managers = sell_managers
                 directional_persistence = persistence_buy
             else:
                 directional_weight = breadth_sell_weight
                 opposite_weight = breadth_buy_weight
+                directional_high_conviction_weight = metric.high_conviction_sell_weight if metric else 0.0
                 directional_managers = sell_managers
                 opposite_managers = buy_managers
                 directional_persistence = persistence_sell
+            quarter_avg_price = metric.quarter_avg_price if metric else None
+            latest_price = _resolve_latest_price(
+                instrument_key=key,
+                metadata=metadata,
+                latest_prices=normalized_latest_prices,
+            )
+            freshness_multiplier = _price_freshness_multiplier(quarter_avg_price, latest_price)
+            strong_drift = _is_strong_price_drift(quarter_avg_price, latest_price)
+            freshness_ok = None if strong_drift is None else not strong_drift
             confidence = _confidence_score(
                 direction=direction,
                 directional_weight=directional_weight,
@@ -684,6 +897,8 @@ def compute_trend_signals(
                 min_weight=breadth_min_weight,
                 magnitude_value=np_adj,
                 magnitude_scale=quarter_magnitude_scale,
+                directional_high_conviction_weight=directional_high_conviction_weight,
+                freshness_multiplier=freshness_multiplier,
             )
             trend_ewma = blended_score * confidence
             trend_delta = trend_ewma - prev_trend
@@ -698,7 +913,6 @@ def compute_trend_signals(
                 persistence_sell=persistence_sell,
             )
 
-            metadata = metric.metadata if metric else previous_state.metadata
             next_state[key] = _InstrumentState(
                 metadata=metadata,
                 impulse_ewma=impulse_score,
@@ -733,6 +947,8 @@ def compute_trend_signals(
                 persistence_sell=persistence_sell,
                 regime=regime,
                 contributors=contributors,
+                freshness_multiplier=freshness_multiplier,
+                freshness_ok=freshness_ok,
             )
 
         state_by_instrument = next_state

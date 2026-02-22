@@ -11,14 +11,35 @@ from tracker.application.use_cases.run_trend_engine import (
 )
 from tracker.config import ManagerConfig
 from tracker.domain.models import ManagerQuarterSnapshot
-from tracker.domain.trends import TrendSignalRow, _confidence_score, _entry_impulse_multiplier, compute_trend_signals
+from tracker.domain.trends import (
+    TrendSignalRow,
+    _confidence_score,
+    _entry_impulse_multiplier,
+    _price_freshness_multiplier,
+    _trade_flow_delta,
+    compute_trend_signals,
+)
 from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _positions(alpha_value: int, beta_value: int) -> list[dict[str, object]]:
     return [
-        {"name": "Alpha", "title": "COM", "cusip": "111111111", "put_call": None, "value": alpha_value, "shares": 1},
-        {"name": "Beta", "title": "COM", "cusip": "222222222", "put_call": None, "value": beta_value, "shares": 1},
+        {
+            "name": "Alpha",
+            "title": "COM",
+            "cusip": "111111111",
+            "put_call": None,
+            "value": alpha_value,
+            "shares": alpha_value,
+        },
+        {
+            "name": "Beta",
+            "title": "COM",
+            "cusip": "222222222",
+            "put_call": None,
+            "value": beta_value,
+            "shares": beta_value,
+        },
     ]
 
 
@@ -202,6 +223,69 @@ def test_run_trend_engine_skips_writing_signals_when_top_unchanged(tmp_path: Pat
         store.close()
 
 
+def test_run_trend_engine_recomputes_with_latest_prices_even_when_top_unchanged(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(100, 900),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=_positions(300, 700),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q3",
+            accession="b-q3",
+            positions=_positions(50, 950),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q4",
+            accession="b-q4",
+            positions=_positions(200, 800),
+        )
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+
+        first = run_trend_engine_for_latest_completed_quarter(
+            managers,
+            store,
+            dry_run=False,
+            latest_prices={"111111111": 1.05},
+        )
+        assert first.status == "computed"
+        first_alpha = next(item for item in store.list_trend_stock_signals("2025Q4") if item.instrument_key == "111111111")
+
+        second = run_trend_engine_for_latest_completed_quarter(
+            managers,
+            store,
+            dry_run=False,
+            latest_prices={"111111111": 5.0},
+        )
+        assert second.status == "computed"
+
+        second_alpha = next(item for item in store.list_trend_stock_signals("2025Q4") if item.instrument_key == "111111111")
+        assert second_alpha.confidence < first_alpha.confidence
+    finally:
+        store.close()
+
+
 def test_run_trend_engine_skips_when_input_unchanged_after_reupsert(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "tracker.sqlite3")
     try:
@@ -256,6 +340,64 @@ def test_run_trend_engine_skips_when_input_unchanged_after_reupsert(tmp_path: Pa
         )
         second = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
         assert second.status == "skipped_no_new_completed_quarter"
+    finally:
+        store.close()
+
+
+def test_run_trend_engine_force_recompute_bypasses_unchanged_input_skip(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(100, 900),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=_positions(300, 700),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q3",
+            accession="b-q3",
+            positions=_positions(50, 950),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q4",
+            accession="b-q4",
+            positions=_positions(200, 800),
+        )
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+
+        first = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert first.status == "computed"
+
+        second = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert second.status == "skipped_no_new_completed_quarter"
+
+        forced = run_trend_engine_for_latest_completed_quarter(
+            managers,
+            store,
+            dry_run=False,
+            force_recompute=True,
+        )
+        assert forced.status == "computed"
+        assert forced.signals_count > 0
     finally:
         store.close()
 
@@ -444,6 +586,159 @@ def test_confidence_directional_and_disagreement_penalty() -> None:
     assert wrong_direction < conflicted
 
 
+def test_confidence_gets_bonus_from_high_conviction_directional_weight() -> None:
+    baseline = _confidence_score(
+        direction="BUY",
+        directional_weight=0.20,
+        opposite_weight=0.02,
+        directional_managers=4,
+        opposite_managers=1,
+        crowding_hhi=0.22,
+        directional_persistence=2,
+        min_managers=3,
+        min_weight=0.10,
+        magnitude_value=0.05,
+        magnitude_scale=0.05,
+        directional_high_conviction_weight=0.0,
+    )
+    boosted = _confidence_score(
+        direction="BUY",
+        directional_weight=0.20,
+        opposite_weight=0.02,
+        directional_managers=4,
+        opposite_managers=1,
+        crowding_hhi=0.22,
+        directional_persistence=2,
+        min_managers=3,
+        min_weight=0.10,
+        magnitude_value=0.05,
+        magnitude_scale=0.05,
+        directional_high_conviction_weight=0.20,
+    )
+    assert boosted > baseline
+
+
+def test_price_freshness_multiplier_reduces_confidence_on_large_drift() -> None:
+    assert _price_freshness_multiplier(100.0, 104.0) == pytest.approx(1.0)
+    assert _price_freshness_multiplier(100.0, 120.0) < 1.0
+    assert _price_freshness_multiplier(100.0, 1000.0) == pytest.approx(0.35)
+
+
+def test_trade_flow_delta_uses_shares_direction_when_available() -> None:
+    # Real-world pattern: shares added, but value-weight can decline due market price move.
+    flow = _trade_flow_delta(
+        prev_weight=0.07759265,
+        curr_weight=0.06901949,
+        prev_shares=311810,
+        curr_shares=313449,
+    )
+    assert flow > 0
+
+    fallback = _trade_flow_delta(
+        prev_weight=0.07759265,
+        curr_weight=0.06901949,
+        prev_shares=0,
+        curr_shares=0,
+    )
+    assert fallback < 0
+
+
+def test_trade_flow_delta_handles_split_like_shares_jump_as_weight_delta() -> None:
+    flow = _trade_flow_delta(
+        prev_weight=0.19211302,
+        curr_weight=0.18147970,
+        prev_shares=41020231,
+        curr_shares=61403089,
+    )
+    assert flow == pytest.approx(-0.01063332)
+
+
+def test_compute_trend_signals_does_not_create_conflict_from_price_only_move() -> None:
+    quarters = ["2025Q3", "2025Q4"]
+    snapshots_by_quarter = {
+        "2025Q3": {
+            "0000000001": ManagerQuarterSnapshot(
+                cik="0000000001",
+                manager_name="Fund A",
+                report_quarter="2025Q3",
+                report_date="2025-09-30",
+                filing_date="2025-11-14",
+                acceptance_datetime="20251114120000",
+                accession="a-q3",
+                source_form="13F-HR",
+                positions=[
+                    {"name": "Alpha", "title": "COM", "cusip": "111111111", "put_call": None, "value": 100, "shares": 100},
+                    {"name": "Beta", "title": "COM", "cusip": "222222222", "put_call": None, "value": 900, "shares": 900},
+                ],
+                aum_value_k=1000,
+                positions_count=2,
+            ),
+            "0000000002": ManagerQuarterSnapshot(
+                cik="0000000002",
+                manager_name="Fund B",
+                report_quarter="2025Q3",
+                report_date="2025-09-30",
+                filing_date="2025-11-14",
+                acceptance_datetime="20251114120000",
+                accession="b-q3",
+                source_form="13F-HR",
+                positions=[
+                    {"name": "Alpha", "title": "COM", "cusip": "111111111", "put_call": None, "value": 100, "shares": 100},
+                    {"name": "Beta", "title": "COM", "cusip": "222222222", "put_call": None, "value": 900, "shares": 900},
+                ],
+                aum_value_k=1000,
+                positions_count=2,
+            ),
+        },
+        "2025Q4": {
+            "0000000001": ManagerQuarterSnapshot(
+                cik="0000000001",
+                manager_name="Fund A",
+                report_quarter="2025Q4",
+                report_date="2025-12-31",
+                filing_date="2026-02-14",
+                acceptance_datetime="20260214120000",
+                accession="a-q4",
+                source_form="13F-HR",
+                positions=[
+                    {"name": "Alpha", "title": "COM", "cusip": "111111111", "put_call": None, "value": 110, "shares": 110},
+                    {"name": "Beta", "title": "COM", "cusip": "222222222", "put_call": None, "value": 890, "shares": 890},
+                ],
+                aum_value_k=1000,
+                positions_count=2,
+            ),
+            "0000000002": ManagerQuarterSnapshot(
+                cik="0000000002",
+                manager_name="Fund B",
+                report_quarter="2025Q4",
+                report_date="2025-12-31",
+                filing_date="2026-02-14",
+                acceptance_datetime="20260214120000",
+                accession="b-q4",
+                source_form="13F-HR",
+                positions=[
+                    # Same shares, lower value => price move only (must not become SELL flow).
+                    {"name": "Alpha", "title": "COM", "cusip": "111111111", "put_call": None, "value": 90, "shares": 100},
+                    {"name": "Beta", "title": "COM", "cusip": "222222222", "put_call": None, "value": 910, "shares": 900},
+                ],
+                aum_value_k=1000,
+                positions_count=2,
+            ),
+        },
+    }
+    manager_weights = {"0000000001": 1.0, "0000000002": 1.0}
+
+    result = compute_trend_signals(
+        quarters=quarters,
+        snapshots_by_quarter=snapshots_by_quarter,
+        manager_weights=manager_weights,
+        blend_mode="tactical",
+    )
+    alpha = next(item for item in result.signals if item.instrument_key == "111111111")
+    assert alpha.buy_managers == 1
+    assert alpha.sell_managers == 0
+
+
 def test_compute_trend_signals_keeps_np_unpenalized_by_crowding() -> None:
     quarters = ["2025Q3", "2025Q4"]
     snapshots_by_quarter = {
@@ -461,3 +756,33 @@ def test_compute_trend_signals_keeps_np_unpenalized_by_crowding() -> None:
     alpha = next(item for item in result.signals if item.instrument_key == "111111111")
     assert alpha.np_raw != 0
     assert alpha.np_adj == pytest.approx(alpha.np_raw)
+
+
+def test_compute_trend_signals_applies_price_freshness_decay() -> None:
+    quarters = ["2025Q3", "2025Q4"]
+    snapshots_by_quarter = {
+        "2025Q3": {"0000000001": _snapshot_for_compute(cik="0000000001", quarter="2025Q3", alpha_value=10, beta_value=990)},
+        "2025Q4": {"0000000001": _snapshot_for_compute(cik="0000000001", quarter="2025Q4", alpha_value=40, beta_value=960)},
+    }
+    manager_weights = {"0000000001": 1.0}
+
+    baseline = compute_trend_signals(
+        quarters=quarters,
+        snapshots_by_quarter=snapshots_by_quarter,
+        manager_weights=manager_weights,
+        blend_mode="tactical",
+    )
+    with_decay = compute_trend_signals(
+        quarters=quarters,
+        snapshots_by_quarter=snapshots_by_quarter,
+        manager_weights=manager_weights,
+        blend_mode="tactical",
+        latest_prices={"111111111": 52000.0},
+    )
+
+    baseline_alpha = next(item for item in baseline.signals if item.instrument_key == "111111111")
+    decayed_alpha = next(item for item in with_decay.signals if item.instrument_key == "111111111")
+    assert baseline_alpha.freshness_ok is None
+    assert decayed_alpha.freshness_ok is False
+    assert decayed_alpha.confidence < baseline_alpha.confidence
+    assert abs(decayed_alpha.trend_ewma) < abs(baseline_alpha.trend_ewma)

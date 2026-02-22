@@ -20,7 +20,7 @@ def _run_show_trends(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _seed_trend_signals(db_path: Path) -> None:
+def _seed_trend_signals(db_path: Path, *, with_freshness: bool = False) -> None:
     store = StateStore(db_path)
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -51,6 +51,8 @@ def _seed_trend_signals(db_path: Path) -> None:
                     regime="STRONG_BUY",
                     contributors_json="[]",
                     computed_at=now_iso,
+                    freshness_multiplier=0.82 if with_freshness else 1.0,
+                    freshness_ok=True if with_freshness else None,
                 ),
                 TrendStockSignal(
                     report_quarter="2025Q4",
@@ -76,6 +78,8 @@ def _seed_trend_signals(db_path: Path) -> None:
                     regime="REVERSAL_BUY",
                     contributors_json="[]",
                     computed_at=now_iso,
+                    freshness_multiplier=0.90 if with_freshness else 1.0,
+                    freshness_ok=True if with_freshness else None,
                 ),
                 TrendStockSignal(
                     report_quarter="2025Q4",
@@ -101,6 +105,8 @@ def _seed_trend_signals(db_path: Path) -> None:
                     regime="STRONG_SELL",
                     contributors_json="[]",
                     computed_at=now_iso,
+                    freshness_multiplier=0.35 if with_freshness else 1.0,
+                    freshness_ok=False if with_freshness else None,
                 ),
             ],
         )
@@ -139,6 +145,7 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
     assert "CCC" in result.stdout
     assert "BBB" not in result.stdout  # confidence 0.40 < default threshold 0.50
     assert " | cusip " not in result.stdout
+    assert "freshness indicator" not in result.stdout
 
 
 def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path) -> None:
@@ -173,3 +180,26 @@ def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path
     )
     assert invalid.returncode == 1
     assert "--min-conf must be between 0 and 1" in invalid.stdout
+
+
+def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC"}, ensure_ascii=True))
+    _seed_trend_signals(db_path, with_freshness=True)
+
+    result = _run_show_trends(
+        "--db",
+        str(db_path),
+        "--quarter",
+        "2025Q4",
+        "--symbols-file",
+        str(symbols_path),
+        "--min-conf",
+        "0.5",
+    )
+
+    assert result.returncode == 0
+    assert "freshness indicator" in result.stdout
+    assert "✅" in result.stdout
+    assert "❌" in result.stdout

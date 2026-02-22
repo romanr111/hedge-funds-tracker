@@ -92,3 +92,5 @@ class TrendStockSignal:
     regime: str
     contributors_json: str
     computed_at: str
+    freshness_multiplier: float = 1.0
+    freshness_ok: bool | None = None

@@ -105,6 +105,8 @@ class StateStore:
                 regime TEXT NOT NULL,
                 contributors_json TEXT NOT NULL,
                 computed_at TEXT NOT NULL,
+                freshness_multiplier REAL NOT NULL DEFAULT 1.0,
+                freshness_ok INTEGER,
                 PRIMARY KEY (report_quarter, instrument_key)
             )
             """
@@ -134,6 +136,12 @@ class StateStore:
             self._conn.execute(
                 "ALTER TABLE trend_stock_signal ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0"
             )
+        if not self._column_exists("trend_stock_signal", "freshness_multiplier"):
+            self._conn.execute(
+                "ALTER TABLE trend_stock_signal ADD COLUMN freshness_multiplier REAL NOT NULL DEFAULT 1.0"
+            )
+        if not self._column_exists("trend_stock_signal", "freshness_ok"):
+            self._conn.execute("ALTER TABLE trend_stock_signal ADD COLUMN freshness_ok INTEGER")
 
     def _table_exists(self, table_name: str) -> bool:
         row = self._conn.execute(
@@ -485,8 +493,8 @@ class StateStore:
                         np_raw, np_adj, impulse_score, accumulation_score, confidence, trend_ewma, trend_delta,
                         breadth_buy_weight, breadth_sell_weight, buy_managers, sell_managers,
                         crowding_hhi, persistence_buy, persistence_sell, regime,
-                        contributors_json, computed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        contributors_json, computed_at, freshness_multiplier, freshness_ok
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [
                         (
@@ -513,6 +521,8 @@ class StateStore:
                             signal.regime,
                             signal.contributors_json,
                             signal.computed_at,
+                            signal.freshness_multiplier,
+                            (1 if signal.freshness_ok else 0) if signal.freshness_ok is not None else None,
                         )
                         for signal in signals
                     ],
@@ -530,7 +540,7 @@ class StateStore:
                     np_raw, np_adj, impulse_score, accumulation_score, confidence, trend_ewma, trend_delta,
                     breadth_buy_weight, breadth_sell_weight, buy_managers, sell_managers,
                     crowding_hhi, persistence_buy, persistence_sell, regime,
-                    contributors_json, computed_at
+                    contributors_json, computed_at, freshness_multiplier, freshness_ok
                 FROM trend_stock_signal
                 WHERE report_quarter = ?
                 ORDER BY trend_ewma DESC
@@ -562,6 +572,8 @@ class StateStore:
                     regime=row["regime"],
                     contributors_json=row["contributors_json"],
                     computed_at=row["computed_at"],
+                    freshness_multiplier=float(row["freshness_multiplier"]),
+                    freshness_ok=(None if row["freshness_ok"] is None else bool(int(row["freshness_ok"]))),
                 )
                 for row in rows
             ]
