@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from collections.abc import Sequence
@@ -14,31 +15,26 @@ from tracker.application.use_cases.notify_quarterly_reports_completion import (
     notify_if_all_reports_published_for_current_quarter,
 )
 from tracker.application.use_cases.backfill_trend_history import run_backfill_trend_history
-from tracker.application.use_cases.run_quarterly_pipeline import run_quarterly_pipeline
 from tracker.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
 from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
 from tracker.application.use_cases.track_manager import process_manager
 from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
+from tracker.domain.idea_actions import (
+    REVERSAL_OR_EMERGING_SELL_TARGET_CONFIDENCE,
+    classify_signal_action,
+    target_confidence_for_regime,
+)
 from tracker.domain.exceptions import StateStoreError
 from tracker.domain.models import Manager
-from tracker.domain.quarters import parse_report_quarter, quarter_sort_key
+from tracker.domain.quarters import parse_report_quarter
 from tracker.domain.timing import format_local_datetime, now_kyiv
 from tracker.infrastructure.logging import configure_logging, log_context, new_trace_id
 from tracker.infrastructure.market import StooqPriceGateway
 
-SELL_TABLE_MIN_CONF = 0.35
+SELL_TABLE_MIN_CONF = REVERSAL_OR_EMERGING_SELL_TARGET_CONFIDENCE
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
-PIPELINE_AUTO_BACKFILL_MIN_QUARTERS = 8
-PIPELINE_HARD_FAIL_STATUSES = {
-    "invalid_as_of_quarter",
-    "no_trend_data",
-    "no_quarters",
-    "no_quarters_before_as_of",
-    "insufficient_input_quarters",
-    "partial_data",
-}
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -96,20 +92,10 @@ def _ticker_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
 
 
 def _action_for_signal(signal: Any) -> str:
-    target = _target_confidence_for_signal(signal)
-    regime = (signal.regime or "").upper()
-    confidence = float(signal.confidence)
-    target_gap_pp = (target - confidence) * 100.0
-
-    if regime.startswith("STRONG_") and confidence >= target:
-        if regime.endswith("_BUY"):
-            return "BUY"
-        if regime.endswith("_SELL"):
-            return "SELL"
-    has_direction = regime.endswith("_BUY") or regime.endswith("_SELL")
-    if has_direction and target_gap_pp <= 5.0 + 1e-9:
-        return "INTERESTING_IDEA"
-    return "MONITOR"
+    return classify_signal_action(
+        regime=(signal.regime or ""),
+        confidence=float(signal.confidence),
+    )
 
 
 def _setup_for_signal(signal: Any) -> str:
@@ -126,16 +112,7 @@ def _setup_for_signal(signal: Any) -> str:
 
 
 def _target_confidence_for_signal(signal: Any) -> float:
-    regime = (signal.regime or "").upper()
-    if regime.startswith("STRONG_"):
-        return 0.65
-    if regime in {"REVERSAL_SELL", "EMERGING_SELL"}:
-        return SELL_TABLE_MIN_CONF
-    if regime in {"REVERSAL_BUY", "EMERGING_BUY"}:
-        return 0.45
-    if regime.startswith("WEAKENING_"):
-        return 0.50
-    return 0.50
+    return target_confidence_for_regime((signal.regime or ""))
 
 
 def _conviction_target_for_signal(signal: Any) -> str:
@@ -295,54 +272,10 @@ def _load_live_latest_prices(
     return latest_prices
 
 
-def _count_pipeline_trend_quarters(*, store: Any, as_of_quarter: str | None) -> int:
-    quarters = store.list_trend_quarters()
-    if as_of_quarter is None:
-        return len(quarters)
-    target_key = quarter_sort_key(as_of_quarter)
-    return sum(1 for quarter in quarters if quarter_sort_key(quarter) <= target_key)
-
-
-def _snapshot_sync_max_quarters(min_oos_quarters: int) -> int:
-    # +2 buffer: one quarter is consumed by trend-history warmup and one
-    # additional quarter protects against occasional empty selection windows.
-    return max(9, min_oos_quarters + 2)
-
-
-def _auto_backfill_from_quarter(
-    *,
-    store: Any,
-    manager_ciks: list[str],
-    as_of_quarter: str | None,
-    required_trend_quarters: int,
-) -> str | None:
-    common_quarters = sorted(store.list_common_report_quarters(manager_ciks), key=quarter_sort_key)
-    if as_of_quarter is not None:
-        target_key = quarter_sort_key(as_of_quarter)
-        common_quarters = [quarter for quarter in common_quarters if quarter_sort_key(quarter) <= target_key]
-    if not common_quarters:
-        return None
-    # One extra quarter is usually needed so earliest target can be computed (history dependency).
-    required_snapshot_quarters = required_trend_quarters + 1
-    if len(common_quarters) <= required_snapshot_quarters:
-        return common_quarters[0]
-    return common_quarters[-required_snapshot_quarters]
-
-
-def _pipeline_quality_fail_set() -> set[str]:
-    raw = os.environ.get("PIPELINE_FAIL_ON_QUALITY", "")
-    values = {item.strip().upper() for item in raw.split(",") if item.strip()}
-    return {item for item in values if item in {"WATCH", "FAIL"}}
-
-
-def _pipeline_exit_code(*, status: str | None, quality_status: str | None, fail_on_quality: set[str]) -> int:
-    normalized_status = (status or "").strip().lower()
-    if normalized_status in PIPELINE_HARD_FAIL_STATUSES:
-        return 1
-    normalized_quality = (quality_status or "").strip().upper()
-    if normalized_quality and normalized_quality in fail_on_quality:
-        return 1
-    return 0
+def _snapshot_sync_max_quarters(*, max_filing_age_days: int) -> int:
+    # Ensure snapshot sync covers the filing-age horizon, plus warm-up and safety buffer.
+    estimated_quarters_from_age = int(math.ceil(max_filing_age_days / 92.0)) + 2
+    return max(9, estimated_quarters_from_age)
 
 
 def main() -> int:
@@ -416,20 +349,6 @@ def _main(logger: logging.Logger) -> int:
         help="Symbol map JSON for live prices from stooq (key: CUSIP/instrument_key, value: ticker).",
     )
     parser.add_argument(
-        "--run-quarterly-pipeline",
-        action="store_true",
-        help="Run quarterly research pipeline (risk-filter, portfolio, walk-forward KPI report).",
-    )
-    parser.add_argument(
-        "--pipeline-quarter",
-        help="Quarter for quarterly pipeline in format YYYYQn. Default: latest trend quarter.",
-    )
-    parser.add_argument(
-        "--pipeline-dry-run-report",
-        action="store_true",
-        help="Generate quarterly pipeline report without writing quarterly pipeline tables.",
-    )
-    parser.add_argument(
         "--backfill-trend-history",
         action="store_true",
         help="Run backfill trend computation for historical quarters as a separate mode.",
@@ -454,9 +373,6 @@ def _main(logger: logging.Logger) -> int:
     )
     args = parser.parse_args()
     show_trends_only_flag = bool(getattr(args, "show_trends_only", False))
-    run_quarterly_pipeline_flag = bool(getattr(args, "run_quarterly_pipeline", False))
-    pipeline_quarter = getattr(args, "pipeline_quarter", None)
-    pipeline_dry_run_report = bool(getattr(args, "pipeline_dry_run_report", False))
     backfill_trend_history_flag = bool(getattr(args, "backfill_trend_history", False))
     backfill_from_quarter = getattr(args, "backfill_from_quarter", None)
     backfill_to_quarter = getattr(args, "backfill_to_quarter", None)
@@ -487,9 +403,6 @@ def _main(logger: logging.Logger) -> int:
     if args.trends_limit <= 0:
         logger.error("--trends-limit must be > 0")
         return 2
-    if pipeline_quarter and parse_report_quarter(pipeline_quarter) is None:
-        logger.error("--pipeline-quarter must use YYYYQn format")
-        return 2
     if backfill_from_quarter and parse_report_quarter(backfill_from_quarter) is None:
         logger.error("--backfill-from-quarter must use YYYYQn format")
         return 2
@@ -500,12 +413,6 @@ def _main(logger: logging.Logger) -> int:
         if parse_report_quarter(backfill_from_quarter) > parse_report_quarter(backfill_to_quarter):
             logger.error("--backfill-from-quarter must be <= --backfill-to-quarter")
             return 2
-    if backfill_trend_history_flag and run_quarterly_pipeline_flag:
-        logger.error("Cannot combine --backfill-trend-history with --run-quarterly-pipeline")
-        return 2
-    if show_trends_only_flag and run_quarterly_pipeline_flag:
-        logger.error("Cannot combine --show-trends-only with --run-quarterly-pipeline")
-        return 2
     if show_trends_only_flag and backfill_trend_history_flag:
         logger.error("Cannot combine --show-trends-only with --backfill-trend-history")
         return 2
@@ -667,7 +574,7 @@ def _main(logger: logging.Logger) -> int:
         managers,
         runtime.store,
         runtime.client,
-        max_quarters=_snapshot_sync_max_quarters(config.pipeline.min_oos_quarters),
+        max_quarters=_snapshot_sync_max_quarters(max_filing_age_days=config.max_filing_age_days),
         max_filing_age_days=config.max_filing_age_days,
         dry_run=args.dry_run,
         logger=logger,
@@ -736,129 +643,6 @@ def _main(logger: logging.Logger) -> int:
         logger=logger,
     )
 
-    pipeline_exit_code = 0
-    if run_quarterly_pipeline_flag:
-        fail_on_quality = _pipeline_quality_fail_set()
-        required_pipeline_quarters = max(
-            PIPELINE_AUTO_BACKFILL_MIN_QUARTERS,
-            config.pipeline.min_oos_quarters + 1,
-        )
-        available_pipeline_quarters = _count_pipeline_trend_quarters(store=runtime.store, as_of_quarter=pipeline_quarter)
-        if not args.dry_run and available_pipeline_quarters < required_pipeline_quarters:
-            auto_backfill_from_quarter = _auto_backfill_from_quarter(
-                store=runtime.store,
-                manager_ciks=[manager.cik for manager in config.managers],
-                as_of_quarter=pipeline_quarter,
-                required_trend_quarters=required_pipeline_quarters,
-            )
-            logger.info(
-                "Quarterly pipeline auto-backfill started",
-                extra={
-                    "available_quarters": available_pipeline_quarters,
-                    "required_quarters": required_pipeline_quarters,
-                    "pipeline_quarter": pipeline_quarter,
-                    "from_quarter": auto_backfill_from_quarter,
-                },
-            )
-            try:
-                auto_backfill_result = run_backfill_trend_history(
-                    list(config.managers),
-                    runtime.store,
-                    dry_run=args.dry_run,
-                    blend_mode=trend_blend_mode,
-                    latest_prices=trend_latest_prices,
-                    from_quarter=auto_backfill_from_quarter,
-                    to_quarter=pipeline_quarter,
-                    include_latest=False,
-                    force_recompute=False,
-                    logger=logger,
-                )
-            except ValueError as exc:
-                runtime.store.close()
-                logger.error("Quarterly pipeline auto-backfill configuration failed", extra={"error": str(exc)})
-                return 1
-
-            logger.info(
-                "Quarterly pipeline auto-backfill status",
-                extra={
-                    "status": auto_backfill_result.status,
-                    "batch_id": auto_backfill_result.batch_id,
-                    "quarters_requested": auto_backfill_result.quarters_requested,
-                    "computed": auto_backfill_result.computed,
-                    "skipped_existing": auto_backfill_result.skipped_existing,
-                    "failed": auto_backfill_result.failed,
-                    "to_quarter": pipeline_quarter,
-                },
-            )
-            print()
-            print(
-                "Auto-backfill summary: "
-                f"requested={auto_backfill_result.quarters_requested}, "
-                f"computed={auto_backfill_result.computed}, "
-                f"skipped_existing={auto_backfill_result.skipped_existing}, "
-                f"failed={auto_backfill_result.failed}, "
-                f"status={auto_backfill_result.status}, "
-                f"batch_id={auto_backfill_result.batch_id}"
-            )
-            if auto_backfill_result.status == "failed":
-                runtime.store.close()
-                logger.error("Quarterly pipeline auto-backfill failed")
-                return 1
-
-            available_pipeline_quarters = _count_pipeline_trend_quarters(store=runtime.store, as_of_quarter=pipeline_quarter)
-
-        if available_pipeline_quarters < required_pipeline_quarters:
-            runtime.store.close()
-            logger.error(
-                "Quarterly pipeline precheck failed: insufficient trend quarters",
-                extra={
-                    "available_quarters": available_pipeline_quarters,
-                    "required_quarters": required_pipeline_quarters,
-                    "pipeline_quarter": pipeline_quarter,
-                },
-            )
-            return 1
-
-        pipeline_result = run_quarterly_pipeline(
-            store=runtime.store,
-            history_gateway=runtime.history_gateway,
-            symbol_map_file=Path(args.trend_live_prices_symbols_file),
-            pipeline=config.pipeline,
-            as_of_quarter=pipeline_quarter,
-            dry_run_report=pipeline_dry_run_report,
-        )
-        logger.info(
-            "Quarterly pipeline status",
-            extra={
-                "status": pipeline_result.status,
-                "as_of_quarter": pipeline_result.as_of_quarter,
-                "run_id": pipeline_result.run_id,
-                "quality_status": pipeline_result.quality_status,
-                "report_dir": str(pipeline_result.report_dir) if pipeline_result.report_dir else None,
-                "dry_run_report": pipeline_dry_run_report,
-            },
-        )
-        if pipeline_result.report_dir is not None:
-            print()
-            print(f"Quarterly report: {pipeline_result.report_dir}")
-            if pipeline_result.quality_status:
-                print(f"Quality status: {pipeline_result.quality_status}")
-
-        pipeline_exit_code = _pipeline_exit_code(
-            status=pipeline_result.status,
-            quality_status=pipeline_result.quality_status,
-            fail_on_quality=fail_on_quality,
-        )
-        if pipeline_exit_code != 0:
-            logger.error(
-                "Quarterly pipeline quality gate failed",
-                extra={
-                    "status": pipeline_result.status,
-                    "quality_status": pipeline_result.quality_status,
-                    "fail_on_quality": sorted(fail_on_quality),
-                },
-            )
-
     runtime.store.close()
     logger.info(
         "Tracker run finished",
@@ -868,4 +652,4 @@ def _main(logger: logging.Logger) -> int:
             "dry_run": args.dry_run,
         },
     )
-    return pipeline_exit_code
+    return 0
