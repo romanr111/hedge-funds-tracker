@@ -10,6 +10,7 @@ import requests
 
 STOOQ_HISTORY_URL = "https://stooq.com/q/d/l/"
 DEFAULT_TIMEOUT = (10, 30)
+DAILY_LIMIT_MARKER = "Exceeded the daily hits limit"
 
 
 class StooqHistoryGateway:
@@ -23,6 +24,8 @@ class StooqHistoryGateway:
         self._session.headers.update({"User-Agent": "HedgeFundsTracker/1.0 (market-data-history)"})
         self._min_interval = min_interval_seconds
         self._last_request_time = 0.0
+        self._history_cache: dict[str, dict[date, tuple[float, float]]] = {}
+        self._daily_limit_hit = False
 
     def _throttle(self) -> None:
         elapsed = time.time() - self._last_request_time
@@ -87,15 +90,30 @@ class StooqHistoryGateway:
         return parsed
 
     def _fetch_ticker_history(self, ticker: str) -> dict[date, tuple[float, float]]:
-        for candidate in self._ticker_query_candidates(ticker):
+        key = ticker.strip().upper()
+        if not key:
+            return {}
+        if key in self._history_cache:
+            return dict(self._history_cache[key])
+        if self._daily_limit_hit:
+            self._history_cache[key] = {}
+            return {}
+
+        for candidate in self._ticker_query_candidates(key):
             symbol = f"{candidate}.US"
             try:
                 payload = self._request_history(symbol)
             except requests.RequestException:
                 continue
+            if DAILY_LIMIT_MARKER.lower() in payload.lower():
+                self._daily_limit_hit = True
+                self._history_cache[key] = {}
+                return {}
             series = self._parse_csv_prices(payload)
             if series:
-                return series
+                self._history_cache[key] = series
+                return dict(series)
+        self._history_cache[key] = {}
         return {}
 
     def get_eod_prices(self, tickers: list[str], start_date: date, end_date: date) -> dict[str, dict[date, float]]:

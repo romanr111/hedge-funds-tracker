@@ -29,12 +29,14 @@ from tracker.infrastructure.market import StooqPriceGateway
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
+IDEAS_OUTPUT_MAX_ROWS = 8
 PIPELINE_AUTO_BACKFILL_MIN_QUARTERS = 8
 PIPELINE_HARD_FAIL_STATUSES = {
     "invalid_as_of_quarter",
     "no_trend_data",
     "no_quarters",
     "no_quarters_before_as_of",
+    "insufficient_input_quarters",
     "partial_data",
 }
 
@@ -57,23 +59,6 @@ def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     output = [render(headers), separator]
     output.extend(render(row) for row in rows)
     return "\n".join(output)
-
-
-def _contributors_preview(contributors_json: str) -> str:
-    try:
-        payload = json.loads(contributors_json)
-    except json.JSONDecodeError:
-        return "-"
-    if not isinstance(payload, list) or not payload:
-        return "-"
-    first = payload[0]
-    if not isinstance(first, dict):
-        return "-"
-    manager_name = first.get("manager_name")
-    signal_value = first.get("signal_value")
-    if isinstance(manager_name, str):
-        return f"{manager_name} ({signal_value})"
-    return "-"
 
 
 def _load_symbol_map(path: Path) -> dict[str, str]:
@@ -111,21 +96,59 @@ def _ticker_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
 
 
 def _action_for_signal(signal: Any) -> str:
+    target = _target_confidence_for_signal(signal)
     regime = (signal.regime or "").upper()
     confidence = float(signal.confidence)
-    if regime == "STRONG_BUY" and confidence >= 0.65:
-        return "ACTION_BUY"
-    if regime in {"REVERSAL_BUY", "EMERGING_BUY"} and confidence >= 0.45:
-        return "WATCH_BUY"
-    if regime == "WEAKENING_BUY":
-        return "WEAKENING_BUY"
-    if regime == "STRONG_SELL" and confidence >= 0.65:
-        return "ACTION_SELL"
-    if regime in {"REVERSAL_SELL", "EMERGING_SELL"} and confidence >= SELL_TABLE_MIN_CONF:
-        return "WATCH_SELL"
-    if regime == "WEAKENING_SELL":
-        return "WEAKENING_SELL"
+    target_gap_pp = (target - confidence) * 100.0
+
+    if regime.startswith("STRONG_") and confidence >= target:
+        if regime.endswith("_BUY"):
+            return "BUY"
+        if regime.endswith("_SELL"):
+            return "SELL"
+    has_direction = regime.endswith("_BUY") or regime.endswith("_SELL")
+    if has_direction and target_gap_pp <= 5.0 + 1e-9:
+        return "INTERESTING_IDEA"
     return "MONITOR"
+
+
+def _setup_for_signal(signal: Any) -> str:
+    regime = (signal.regime or "").upper()
+    if regime.startswith("STRONG_"):
+        return "Strong"
+    if regime.startswith("REVERSAL_"):
+        return "Reversal"
+    if regime.startswith("EMERGING_"):
+        return "Emerging"
+    if regime.startswith("WEAKENING_"):
+        return "Weakening"
+    return "Unknown"
+
+
+def _target_confidence_for_signal(signal: Any) -> float:
+    regime = (signal.regime or "").upper()
+    if regime.startswith("STRONG_"):
+        return 0.65
+    if regime in {"REVERSAL_SELL", "EMERGING_SELL"}:
+        return SELL_TABLE_MIN_CONF
+    if regime in {"REVERSAL_BUY", "EMERGING_BUY"}:
+        return 0.45
+    if regime.startswith("WEAKENING_"):
+        return 0.50
+    return 0.50
+
+
+def _conviction_target_for_signal(signal: Any) -> str:
+    confidence_pct = round(float(signal.confidence) * 100)
+    target_pct = round(_target_confidence_for_signal(signal) * 100)
+    return f"{confidence_pct}% (Target: {target_pct}%)"
+
+
+def _freshness_icon(signal: Any) -> str:
+    freshness_ok = getattr(signal, "freshness_ok", None)
+    if freshness_ok is None:
+        return "❌"
+    return "✅" if bool(freshness_ok) else "❌"
 
 
 def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> None:
@@ -142,7 +165,7 @@ def _print_detailed_trend_table(
     report_quarter: str,
     *,
     min_conf: float = 0.45,
-    limit: int = 15,
+    limit: int = IDEAS_OUTPUT_MAX_ROWS,
     show_reversals: bool = False,
     symbols_file: str = "config/cusip_tickers.json",
 ) -> None:
@@ -152,6 +175,7 @@ def _print_detailed_trend_table(
         print(f"No trend signals found for {report_quarter}.")
         return
 
+    effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
     sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
     buy = sorted(
         [
@@ -166,7 +190,7 @@ def _print_detailed_trend_table(
         ],
         key=lambda item: item.trend_ewma,
         reverse=True,
-    )[:limit]
+    )[:effective_limit]
     sell = sorted(
         [
             item
@@ -174,7 +198,7 @@ def _print_detailed_trend_table(
             if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
         ],
         key=lambda item: item.trend_ewma,
-    )[:limit]
+    )[:effective_limit]
     reversals = sorted(
         [
             item
@@ -183,46 +207,32 @@ def _print_detailed_trend_table(
         ],
         key=lambda item: abs(item.trend_delta),
         reverse=True,
-    )[:limit]
+    )[:effective_limit]
 
     print()
     print(f"Report quarter: {report_quarter}")
     print(f"Signals total: {len(signals)}")
 
     headers = [
-        "action",
-        "ticker",
-        "regime",
-        "trend",
-        "delta",
-        "impulse",
-        "accum",
-        "conf",
-        "breadth(+/-)",
-        "issuer",
-        "top contributor",
+        "Ticker",
+        "Action",
+        "Setup (Regime)",
+        "Conviction / Target",
+        "Trend",
+        "Consensus (+/-)",
+        "Data Fresh",
     ]
-    freshness_enabled = any(getattr(item, "freshness_ok", None) is not None for item in signals)
-    if freshness_enabled:
-        headers.append("freshness indicator")
 
     def _row(item: Any) -> list[str]:
         row = [
-            _action_for_signal(item),
             _ticker_for_signal(item, symbol_map),
-            item.regime,
-            f"{item.trend_ewma:.6f}",
-            f"{item.trend_delta:.6f}",
-            f"{item.impulse_score:.6f}",
-            f"{item.accumulation_score:.6f}",
-            f"{item.confidence:.3f}",
+            _action_for_signal(item),
+            _setup_for_signal(item),
+            _conviction_target_for_signal(item),
+            f"{item.trend_ewma:.4f}",
             f"{item.buy_managers}/{item.sell_managers}",
-            item.issuer_name or "-",
-            _contributors_preview(item.contributors_json),
+            _freshness_icon(item),
         ]
-        if freshness_enabled:
-            freshness_ok = getattr(item, "freshness_ok", None)
-            row.append("-" if freshness_ok is None else ("✅" if bool(freshness_ok) else "❌"))
         return row
 
     _print_section("Top Buy Trends", headers, [_row(item) for item in buy])
@@ -293,6 +303,32 @@ def _count_pipeline_trend_quarters(*, store: Any, as_of_quarter: str | None) -> 
     return sum(1 for quarter in quarters if quarter_sort_key(quarter) <= target_key)
 
 
+def _snapshot_sync_max_quarters(min_oos_quarters: int) -> int:
+    # +2 buffer: one quarter is consumed by trend-history warmup and one
+    # additional quarter protects against occasional empty selection windows.
+    return max(9, min_oos_quarters + 2)
+
+
+def _auto_backfill_from_quarter(
+    *,
+    store: Any,
+    manager_ciks: list[str],
+    as_of_quarter: str | None,
+    required_trend_quarters: int,
+) -> str | None:
+    common_quarters = sorted(store.list_common_report_quarters(manager_ciks), key=quarter_sort_key)
+    if as_of_quarter is not None:
+        target_key = quarter_sort_key(as_of_quarter)
+        common_quarters = [quarter for quarter in common_quarters if quarter_sort_key(quarter) <= target_key]
+    if not common_quarters:
+        return None
+    # One extra quarter is usually needed so earliest target can be computed (history dependency).
+    required_snapshot_quarters = required_trend_quarters + 1
+    if len(common_quarters) <= required_snapshot_quarters:
+        return common_quarters[0]
+    return common_quarters[-required_snapshot_quarters]
+
+
 def _pipeline_quality_fail_set() -> set[str]:
     raw = os.environ.get("PIPELINE_FAIL_ON_QUALITY", "")
     values = {item.strip().upper() for item in raw.split(",") if item.strip()}
@@ -344,30 +380,35 @@ def _main(logger: logging.Logger) -> int:
         help="Always print detailed trends table after tracker run (also in non-interactive output).",
     )
     parser.add_argument(
+        "--show-trends-only",
+        action="store_true",
+        help="Print detailed trends table from existing DB signals and exit (no sync/trend recompute).",
+    )
+    parser.add_argument(
         "--trends-quarter",
-        help="Quarter for --show-trends-detailed in format YYYYQn. Default: computed/latest quarter.",
+        help="Quarter for --show-trends-detailed/--show-trends-only in format YYYYQn. Default: computed/latest quarter.",
     )
     parser.add_argument(
         "--trends-min-conf",
         type=float,
         default=0.45,
-        help="Buy/reversal confidence for --show-trends-detailed (default: 0.45; sells use min(threshold, 0.35)).",
+        help="Buy/reversal confidence for --show-trends-detailed/--show-trends-only (default: 0.45; sells use min(threshold, 0.35)).",
     )
     parser.add_argument(
         "--trends-limit",
         type=int,
-        default=15,
-        help="Rows per section for --show-trends-detailed (default: 15).",
+        default=IDEAS_OUTPUT_MAX_ROWS,
+        help="Rows per section for --show-trends-detailed/--show-trends-only (default: 8, max: 8).",
     )
     parser.add_argument(
         "--trends-show-reversals",
         action="store_true",
-        help="Include reversals section in --show-trends-detailed output.",
+        help="Include reversals section in --show-trends-detailed/--show-trends-only output.",
     )
     parser.add_argument(
         "--trends-symbols-file",
         default="config/cusip_tickers.json",
-        help="Symbol map JSON for --show-trends-detailed.",
+        help="Symbol map JSON for --show-trends-detailed/--show-trends-only.",
     )
     parser.add_argument(
         "--trend-live-prices-symbols-file",
@@ -412,6 +453,7 @@ def _main(logger: logging.Logger) -> int:
         help="Include latest completed quarter into backfill run.",
     )
     args = parser.parse_args()
+    show_trends_only_flag = bool(getattr(args, "show_trends_only", False))
     run_quarterly_pipeline_flag = bool(getattr(args, "run_quarterly_pipeline", False))
     pipeline_quarter = getattr(args, "pipeline_quarter", None)
     pipeline_dry_run_report = bool(getattr(args, "pipeline_dry_run_report", False))
@@ -429,6 +471,15 @@ def _main(logger: logging.Logger) -> int:
         return 2
     if args.dry_run and args.clean_state == "clean_state":
         logger.error("Cannot combine --dry-run with clean_state")
+        return 2
+    if show_trends_only_flag and args.test_notification:
+        logger.error("Cannot combine --show-trends-only with --test-notification")
+        return 2
+    if show_trends_only_flag and args.clean_state == "clean_state":
+        logger.error("Cannot combine --show-trends-only with clean_state")
+        return 2
+    if show_trends_only_flag and args.force_trend_recompute:
+        logger.error("Cannot combine --show-trends-only with --force-trend-recompute")
         return 2
     if args.trends_min_conf < 0 or args.trends_min_conf > 1:
         logger.error("--trends-min-conf must be between 0 and 1")
@@ -451,6 +502,12 @@ def _main(logger: logging.Logger) -> int:
             return 2
     if backfill_trend_history_flag and run_quarterly_pipeline_flag:
         logger.error("Cannot combine --backfill-trend-history with --run-quarterly-pipeline")
+        return 2
+    if show_trends_only_flag and run_quarterly_pipeline_flag:
+        logger.error("Cannot combine --show-trends-only with --run-quarterly-pipeline")
+        return 2
+    if show_trends_only_flag and backfill_trend_history_flag:
+        logger.error("Cannot combine --show-trends-only with --backfill-trend-history")
         return 2
     if not backfill_trend_history_flag and (
         backfill_from_quarter or backfill_to_quarter or backfill_force or backfill_include_latest
@@ -496,6 +553,32 @@ def _main(logger: logging.Logger) -> int:
     except (ValueError, StateStoreError) as exc:
         logger.error("Runtime initialization failed", extra={"error": str(exc)})
         return 1
+
+    if show_trends_only_flag:
+        quarter_for_table = args.trends_quarter or runtime.store.get_latest_trend_quarter()
+        if quarter_for_table is None:
+            print("No trend signals found.")
+        else:
+            _print_detailed_trend_table(
+                runtime.store,
+                quarter_for_table,
+                min_conf=args.trends_min_conf,
+                limit=args.trends_limit,
+                show_reversals=args.trends_show_reversals,
+                symbols_file=args.trends_symbols_file,
+            )
+        runtime.store.close()
+        logger.info(
+            "Tracker run finished",
+            extra={
+                "finished_at_local": format_local_datetime(now_kyiv()),
+                "managers_count": len(config.managers),
+                "dry_run": args.dry_run,
+                "mode": "show_trends_only",
+                "report_quarter": quarter_for_table,
+            },
+        )
+        return 0
 
     if backfill_trend_history_flag:
         if args.clean_state == "clean_state":
@@ -584,7 +667,7 @@ def _main(logger: logging.Logger) -> int:
         managers,
         runtime.store,
         runtime.client,
-        max_quarters=9,
+        max_quarters=_snapshot_sync_max_quarters(config.pipeline.min_oos_quarters),
         max_filing_age_days=config.max_filing_age_days,
         dry_run=args.dry_run,
         logger=logger,
@@ -656,14 +739,25 @@ def _main(logger: logging.Logger) -> int:
     pipeline_exit_code = 0
     if run_quarterly_pipeline_flag:
         fail_on_quality = _pipeline_quality_fail_set()
+        required_pipeline_quarters = max(
+            PIPELINE_AUTO_BACKFILL_MIN_QUARTERS,
+            config.pipeline.min_oos_quarters + 1,
+        )
         available_pipeline_quarters = _count_pipeline_trend_quarters(store=runtime.store, as_of_quarter=pipeline_quarter)
-        if not args.dry_run and available_pipeline_quarters < PIPELINE_AUTO_BACKFILL_MIN_QUARTERS:
+        if not args.dry_run and available_pipeline_quarters < required_pipeline_quarters:
+            auto_backfill_from_quarter = _auto_backfill_from_quarter(
+                store=runtime.store,
+                manager_ciks=[manager.cik for manager in config.managers],
+                as_of_quarter=pipeline_quarter,
+                required_trend_quarters=required_pipeline_quarters,
+            )
             logger.info(
                 "Quarterly pipeline auto-backfill started",
                 extra={
                     "available_quarters": available_pipeline_quarters,
-                    "required_quarters": PIPELINE_AUTO_BACKFILL_MIN_QUARTERS,
+                    "required_quarters": required_pipeline_quarters,
                     "pipeline_quarter": pipeline_quarter,
+                    "from_quarter": auto_backfill_from_quarter,
                 },
             )
             try:
@@ -673,7 +767,7 @@ def _main(logger: logging.Logger) -> int:
                     dry_run=args.dry_run,
                     blend_mode=trend_blend_mode,
                     latest_prices=trend_latest_prices,
-                    from_quarter=None,
+                    from_quarter=auto_backfill_from_quarter,
                     to_quarter=pipeline_quarter,
                     include_latest=False,
                     force_recompute=False,
@@ -710,6 +804,20 @@ def _main(logger: logging.Logger) -> int:
                 runtime.store.close()
                 logger.error("Quarterly pipeline auto-backfill failed")
                 return 1
+
+            available_pipeline_quarters = _count_pipeline_trend_quarters(store=runtime.store, as_of_quarter=pipeline_quarter)
+
+        if available_pipeline_quarters < required_pipeline_quarters:
+            runtime.store.close()
+            logger.error(
+                "Quarterly pipeline precheck failed: insufficient trend quarters",
+                extra={
+                    "available_quarters": available_pipeline_quarters,
+                    "required_quarters": required_pipeline_quarters,
+                    "pipeline_quarter": pipeline_quarter,
+                },
+            )
+            return 1
 
         pipeline_result = run_quarterly_pipeline(
             store=runtime.store,

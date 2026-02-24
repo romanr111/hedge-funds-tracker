@@ -13,6 +13,7 @@ MAX_POSITION_WEIGHT_FULL_SIGNAL = 0.05
 HIGH_CONVICTION_POSITION_WEIGHT_THRESHOLD = 0.05
 SHARES_CORPORATE_ACTION_CHANGE_THRESHOLD = 0.20
 CORPORATE_ACTION_WEIGHT_DELTA_MAX = 0.02
+SHARES_ACTIVITY_NOISE_THRESHOLD = 0.015
 Z_CLIP = 5.0
 Z_SCALE = 2.0
 MAD_EPS = 1e-6
@@ -295,7 +296,7 @@ def _trade_flow_delta(*, prev_weight: float, curr_weight: float, prev_shares: in
             shares_change_ratio = 1.0
         else:
             shares_change_ratio = 0.0
-        if abs(shares_change_ratio) < MAD_EPS:
+        if abs(shares_change_ratio) <= SHARES_ACTIVITY_NOISE_THRESHOLD:
             return 0.0
         # Guard against stock split / share denomination effects that can
         # change shares strongly with near-flat portfolio weight.

@@ -850,7 +850,7 @@ def test_trade_flow_delta_uses_shares_direction_when_available() -> None:
         prev_weight=0.07759265,
         curr_weight=0.06901949,
         prev_shares=311810,
-        curr_shares=313449,
+        curr_shares=317000,
     )
     assert flow > 0
 
@@ -861,6 +861,32 @@ def test_trade_flow_delta_uses_shares_direction_when_available() -> None:
         curr_shares=0,
     )
     assert fallback < 0
+
+
+def test_trade_flow_delta_ignores_small_shares_noise_up_to_one_point_five_percent() -> None:
+    flow_at_one_point_five_percent = _trade_flow_delta(
+        prev_weight=0.10,
+        curr_weight=0.11,
+        prev_shares=10000,
+        curr_shares=10150,
+    )
+    assert flow_at_one_point_five_percent == pytest.approx(0.0)
+
+    flow_below_one_point_five_percent = _trade_flow_delta(
+        prev_weight=0.10,
+        curr_weight=0.11,
+        prev_shares=10000,
+        curr_shares=10149,
+    )
+    assert flow_below_one_point_five_percent == pytest.approx(0.0)
+
+    flow_above_one_point_five_percent = _trade_flow_delta(
+        prev_weight=0.10,
+        curr_weight=0.11,
+        prev_shares=10000,
+        curr_shares=10160,
+    )
+    assert flow_above_one_point_five_percent > 0
 
 
 def test_trade_flow_delta_handles_split_like_shares_jump_as_weight_delta() -> None:

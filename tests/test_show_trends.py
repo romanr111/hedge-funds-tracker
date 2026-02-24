@@ -141,6 +141,17 @@ def _seed_trend_signals(db_path: Path, *, with_freshness: bool = False) -> None:
         store.close()
 
 
+def _section_rows(output: str, title: str) -> list[str]:
+    lines = output.splitlines()
+    start = lines.index(title)
+    rows: list[str] = []
+    for line in lines[start + 3 :]:
+        if not line.strip():
+            break
+        rows.append(line)
+    return rows
+
+
 def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: Path) -> None:
     db_path = tmp_path / "tracker.sqlite3"
     symbols_path = tmp_path / "symbols.json"
@@ -174,7 +185,112 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
     assert "BBB" not in result.stdout  # confidence 0.40 < default threshold 0.50
     assert "DDD" not in result.stdout  # trend 0.0009 < buy-table threshold 0.001
     assert " | cusip " not in result.stdout
-    assert "freshness indicator" not in result.stdout
+    assert "Data Fresh" in result.stdout
+    assert "❌" in result.stdout
+    assert "INTERESTING_IDEA" in result.stdout
+    assert "SELL" in result.stdout
+    assert "WATCH" not in result.stdout
+    assert "delta" not in result.stdout
+    assert "impulse" not in result.stdout
+    assert "accum" not in result.stdout
+    assert "issuer" not in result.stdout
+
+
+def test_show_trends_caps_buy_and_sell_ideas_to_eight_rows(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    signals: list[TrendStockSignal] = []
+    symbol_map: dict[str, str] = {}
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    for idx in range(12):
+        key = f"1{idx:08d}"
+        symbol_map[key] = f"BUY{idx:02d}"
+        signals.append(
+            TrendStockSignal(
+                report_quarter="2025Q4",
+                instrument_key=key,
+                cusip=key,
+                put_call=None,
+                issuer_name=f"Buy Corp {idx}",
+                title="COM",
+                np_raw=0.12,
+                np_adj=0.12,
+                impulse_score=0.11,
+                accumulation_score=0.09,
+                confidence=0.80,
+                trend_ewma=0.10 - (idx * 0.001),
+                trend_delta=0.02,
+                breadth_buy_weight=0.20,
+                breadth_sell_weight=0.01,
+                buy_managers=4,
+                sell_managers=1,
+                crowding_hhi=0.20,
+                persistence_buy=2,
+                persistence_sell=0,
+                regime="STRONG_BUY",
+                contributors_json="[]",
+                computed_at=now_iso,
+                freshness_multiplier=1.0,
+                freshness_ok=True,
+            )
+        )
+
+    for idx in range(12):
+        key = f"2{idx:08d}"
+        symbol_map[key] = f"SEL{idx:02d}"
+        signals.append(
+            TrendStockSignal(
+                report_quarter="2025Q4",
+                instrument_key=key,
+                cusip=key,
+                put_call=None,
+                issuer_name=f"Sell Corp {idx}",
+                title="COM",
+                np_raw=-0.12,
+                np_adj=-0.12,
+                impulse_score=-0.11,
+                accumulation_score=-0.09,
+                confidence=0.80,
+                trend_ewma=-0.10 + (idx * 0.001),
+                trend_delta=-0.02,
+                breadth_buy_weight=0.01,
+                breadth_sell_weight=0.20,
+                buy_managers=1,
+                sell_managers=4,
+                crowding_hhi=0.20,
+                persistence_buy=0,
+                persistence_sell=2,
+                regime="STRONG_SELL",
+                contributors_json="[]",
+                computed_at=now_iso,
+                freshness_multiplier=1.0,
+                freshness_ok=True,
+            )
+        )
+
+    store = StateStore(db_path)
+    try:
+        store.replace_trend_stock_signals("2025Q4", signals)
+    finally:
+        store.close()
+
+    symbols_path.write_text(json.dumps(symbol_map, ensure_ascii=True))
+
+    result = _run_show_trends(
+        "--db",
+        str(db_path),
+        "--quarter",
+        "2025Q4",
+        "--symbols-file",
+        str(symbols_path),
+        "--limit",
+        "50",
+    )
+
+    assert result.returncode == 0
+    assert len(_section_rows(result.stdout, "Top Buy Trends")) == 8
+    assert len(_section_rows(result.stdout, "Top Sell Trends")) == 8
 
 
 def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path) -> None:
@@ -230,7 +346,7 @@ def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: P
     )
 
     assert result.returncode == 0
-    assert "freshness indicator" in result.stdout
+    assert "Data Fresh" in result.stdout
     assert "✅" in result.stdout
     assert "❌" in result.stdout
     assert "DDD" not in result.stdout

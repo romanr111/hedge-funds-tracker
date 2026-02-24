@@ -383,32 +383,32 @@ def run_walk_forward_backtest(
             total += 1
             if stock_return > benchmark_period_return:
                 hits += 1
-        if total > 0:
-            precision = hits / float(total)
-            precision_values.append(precision)
-            hit_values.append(precision)
-            quarter_hit_rates.append((quarter, precision))
-            quarter_kpis.append(PipelineKPI(metric="precision_at_k", scope="quarter", scope_key=quarter, value=precision))
-            quarter_kpis.append(PipelineKPI(metric="hit_rate_vs_spy", scope="quarter", scope_key=quarter, value=precision))
+        precision = (hits / float(total)) if total > 0 else 0.0
+        precision_values.append(precision)
+        hit_values.append(precision)
+        quarter_hit_rates.append((quarter, precision))
+        quarter_kpis.append(PipelineKPI(metric="precision_at_k", scope="quarter", scope_key=quarter, value=precision))
+        quarter_kpis.append(PipelineKPI(metric="hit_rate_vs_spy", scope="quarter", scope_key=quarter, value=precision))
 
         passed_signals = [signal for signal in risk_signals_by_quarter.get(quarter, []) if signal.passed_filters]
         if passed_signals:
-            covered = 0
-            for signal in passed_signals:
-                stock_return = _return_between(ticker_prices.get(signal.ticker, {}), entry_day, exit_day)
-                if stock_return is not None:
-                    covered += 1
-            coverage_ratio = covered / float(len(passed_signals))
-            coverage_values.append(coverage_ratio)
-            quarter_kpis.append(
-                PipelineKPI(
-                    metric="universe_coverage_ratio",
-                    scope="quarter",
-                    scope_key=quarter,
-                    value=coverage_ratio,
-                )
+            covered = sum(
+                1
+                for signal in passed_signals
+                if _return_between(ticker_prices.get(signal.ticker, {}), entry_day, exit_day) is not None
             )
-
+            coverage_ratio = covered / float(len(passed_signals))
+        else:
+            coverage_ratio = 0.0
+        coverage_values.append(coverage_ratio)
+        quarter_kpis.append(
+            PipelineKPI(
+                metric="universe_coverage_ratio",
+                scope="quarter",
+                scope_key=quarter,
+                value=coverage_ratio,
+            )
+        )
         scores: list[float] = []
         forward_returns: list[float] = []
         for signal in passed_signals:
