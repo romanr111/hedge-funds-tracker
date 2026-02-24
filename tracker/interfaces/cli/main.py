@@ -20,11 +20,6 @@ from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_sn
 from tracker.application.use_cases.track_manager import process_manager
 from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
-from tracker.domain.idea_actions import (
-    REVERSAL_OR_EMERGING_SELL_TARGET_CONFIDENCE,
-    classify_signal_action,
-    target_confidence_for_regime,
-)
 from tracker.domain.exceptions import StateStoreError
 from tracker.domain.models import Manager
 from tracker.domain.quarters import parse_report_quarter
@@ -32,7 +27,7 @@ from tracker.domain.timing import format_local_datetime, now_kyiv
 from tracker.infrastructure.logging import configure_logging, log_context, new_trace_id
 from tracker.infrastructure.market import StooqPriceGateway
 
-SELL_TABLE_MIN_CONF = REVERSAL_OR_EMERGING_SELL_TARGET_CONFIDENCE
+SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
 
@@ -92,10 +87,20 @@ def _ticker_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
 
 
 def _action_for_signal(signal: Any) -> str:
-    return classify_signal_action(
-        regime=(signal.regime or ""),
-        confidence=float(signal.confidence),
-    )
+    target = _target_confidence_for_signal(signal)
+    regime = (signal.regime or "").upper()
+    confidence = float(signal.confidence)
+    target_gap_pp = (target - confidence) * 100.0
+
+    if regime.startswith("STRONG_") and confidence >= target:
+        if regime.endswith("_BUY"):
+            return "BUY"
+        if regime.endswith("_SELL"):
+            return "SELL"
+    has_direction = regime.endswith("_BUY") or regime.endswith("_SELL")
+    if has_direction and target_gap_pp <= 5.0 + 1e-9:
+        return "INTERESTING_IDEA"
+    return "MONITOR"
 
 
 def _setup_for_signal(signal: Any) -> str:
@@ -112,7 +117,16 @@ def _setup_for_signal(signal: Any) -> str:
 
 
 def _target_confidence_for_signal(signal: Any) -> float:
-    return target_confidence_for_regime((signal.regime or ""))
+    regime = (signal.regime or "").upper()
+    if regime.startswith("STRONG_"):
+        return 0.65
+    if regime in {"REVERSAL_SELL", "EMERGING_SELL"}:
+        return SELL_TABLE_MIN_CONF
+    if regime in {"REVERSAL_BUY", "EMERGING_BUY"}:
+        return 0.45
+    if regime.startswith("WEAKENING_"):
+        return 0.50
+    return 0.50
 
 
 def _conviction_target_for_signal(signal: Any) -> str:
