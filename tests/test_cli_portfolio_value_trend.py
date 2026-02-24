@@ -88,8 +88,14 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
         )
 
         for quarter, values in (
-            ("2025Q3", {"0000000001": 100_000, "0000000002": 200_000, "0000000003": 300_000}),
-            ("2025Q4", {"0000000001": 125_000, "0000000002": 202_000, "0000000003": 250_000, "0000000004": 90_000}),
+            (
+                "2025Q3",
+                {"0000000001": 100_000_000_000, "0000000002": 200_000_000_000, "0000000003": 300_000_000_000},
+            ),
+            (
+                "2025Q4",
+                {"0000000001": 125_000_000_000, "0000000002": 202_000_000_000, "0000000003": 250_000_000_000, "0000000004": 90_000_000_000},
+            ),
         ):
             for cik, aum_value_k in values.items():
                 store.upsert_manager_quarter_snapshot(
@@ -131,8 +137,8 @@ def test_compute_portfolio_value_trend_summary_classifies_growth_hold_reduction(
     assert summary.growing_managers == 1
     assert summary.holding_managers == 1
     assert summary.reducing_managers == 1
-    assert summary.previous_total_value_k == 600_000
-    assert summary.current_total_value_k == 577_000
+    assert summary.previous_total_value_k == 600_000_000_000
+    assert summary.current_total_value_k == 577_000_000_000
 
 
 def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
@@ -162,9 +168,8 @@ def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
     assert "Top Sell Trends" in captured.out
     assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
-    assert "Managers analyzed: 3/4 (missing current: 0, missing previous: 1)" in captured.out
-    assert "Aggregate portfolio value:" in captured.out
-    assert "(-3.8%; Reducing)" in captured.out
+    assert "Managers analyzed: 3/4" in captured.out
+    assert "Aggregate portfolio value: $600B -> $577B (-3.8% Reducing)" in captured.out
     assert "Growing" in captured.out
     assert "Holding" in captured.out
     assert "Reducing" in captured.out

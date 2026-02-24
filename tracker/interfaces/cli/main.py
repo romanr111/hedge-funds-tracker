@@ -202,12 +202,8 @@ def _portfolio_value_direction(change_ratio: float) -> str:
 
 
 def _format_value_k(value_k: int) -> str:
-    absolute_value = abs(value_k)
-    if absolute_value >= 1_000_000:
-        return f"${value_k / 1_000_000:.2f}B"
-    if absolute_value >= 1_000:
-        return f"${value_k / 1_000:.2f}M"
-    return f"${value_k:,}K"
+    value_billions = round(value_k / 1_000_000_000)
+    return f"${value_billions:,}B"
 
 
 def _format_signed_ratio(value: float) -> str:
@@ -296,11 +292,7 @@ def _print_portfolio_value_trend_summary(
     print()
     print("Hedge Funds Portfolio Value Trend (QoQ)")
     print(f"Compared quarters: {summary.previous_quarter} -> {summary.report_quarter}")
-    print(
-        "Managers analyzed: "
-        f"{summary.analyzed_managers}/{summary.selected_managers}"
-        f" (missing current: {summary.missing_current}, missing previous: {summary.missing_previous})"
-    )
+    print(f"Managers analyzed: {summary.analyzed_managers}/{summary.selected_managers}")
 
     if summary.analyzed_managers == 0:
         print("Not enough comparable snapshots to determine portfolio value direction.")
@@ -314,7 +306,7 @@ def _print_portfolio_value_trend_summary(
     print(
         "Aggregate portfolio value: "
         f"{_format_value_k(summary.previous_total_value_k)} -> {_format_value_k(summary.current_total_value_k)} "
-        f"({_format_signed_ratio(aggregate_change_ratio)}; {aggregate_direction})"
+        f"({_format_signed_ratio(aggregate_change_ratio)} {aggregate_direction})"
     )
 
     def _share(count: int) -> float:
