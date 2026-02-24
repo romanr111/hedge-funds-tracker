@@ -39,7 +39,6 @@ class StateStore:
         )
         self._migrate_schema()
         self._initialize_trend_schema()
-        self._initialize_quarterly_pipeline_schema()
         self._conn.commit()
 
     def _initialize_trend_schema(self) -> None:
@@ -160,65 +159,6 @@ class StateStore:
             self._conn.execute("ALTER TABLE trend_run ADD COLUMN is_backfill INTEGER NOT NULL DEFAULT 0")
         if not self._column_exists("trend_run", "backfill_batch_id"):
             self._conn.execute("ALTER TABLE trend_run ADD COLUMN backfill_batch_id TEXT")
-
-    def _initialize_quarterly_pipeline_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quarterly_pipeline_run (
-                run_id TEXT PRIMARY KEY,
-                as_of_quarter TEXT NOT NULL,
-                status TEXT NOT NULL,
-                config_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                finished_at TEXT,
-                notes_json TEXT
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quarterly_portfolio_position (
-                run_id TEXT NOT NULL,
-                report_quarter TEXT NOT NULL,
-                instrument_key TEXT NOT NULL,
-                ticker TEXT NOT NULL,
-                sector TEXT,
-                country TEXT,
-                score_raw REAL NOT NULL,
-                score_risk REAL NOT NULL,
-                target_weight REAL NOT NULL,
-                weight_capped REAL NOT NULL,
-                passed_filters INTEGER NOT NULL,
-                filter_reasons_json TEXT,
-                PRIMARY KEY (run_id, report_quarter, instrument_key)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quarterly_return_series (
-                run_id TEXT NOT NULL,
-                date TEXT NOT NULL,
-                strategy_gross_return REAL NOT NULL,
-                strategy_net_return REAL NOT NULL,
-                benchmark_return REAL NOT NULL,
-                turnover REAL NOT NULL,
-                PRIMARY KEY (run_id, date)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS quarterly_kpi (
-                run_id TEXT NOT NULL,
-                metric TEXT NOT NULL,
-                scope TEXT NOT NULL,
-                scope_key TEXT,
-                value REAL NOT NULL,
-                PRIMARY KEY (run_id, metric, scope, scope_key)
-            )
-            """
-        )
 
     def _table_exists(self, table_name: str) -> bool:
         row = self._conn.execute(
@@ -760,214 +700,18 @@ class StateStore:
         except sqlite3.Error as exc:
             raise StateStoreError(f"Failed to check trend signals existence for quarter {report_quarter}: {exc}") from exc
 
-    def upsert_quarterly_pipeline_run(
-        self,
-        *,
-        run_id: str,
-        as_of_quarter: str,
-        status: str,
-        config_json: str,
-        created_at: str,
-        finished_at: str | None,
-        notes_json: str | None,
-    ) -> None:
-        try:
-            self._conn.execute(
-                """
-                INSERT INTO quarterly_pipeline_run (
-                    run_id, as_of_quarter, status, config_json, created_at, finished_at, notes_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    as_of_quarter = excluded.as_of_quarter,
-                    status = excluded.status,
-                    config_json = excluded.config_json,
-                    created_at = excluded.created_at,
-                    finished_at = excluded.finished_at,
-                    notes_json = excluded.notes_json
-                """,
-                (run_id, as_of_quarter, status, config_json, created_at, finished_at, notes_json),
-            )
-            self._conn.commit()
-        except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to upsert quarterly pipeline run {run_id}: {exc}") from exc
-
-    def update_quarterly_pipeline_run_status(
-        self,
-        *,
-        run_id: str,
-        status: str,
-        finished_at: str | None,
-        notes_json: str | None,
-    ) -> None:
-        try:
-            self._conn.execute(
-                """
-                UPDATE quarterly_pipeline_run
-                SET status = ?, finished_at = ?, notes_json = ?
-                WHERE run_id = ?
-                """,
-                (status, finished_at, notes_json, run_id),
-            )
-            self._conn.commit()
-        except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to update quarterly pipeline run status {run_id}: {exc}") from exc
-
-    def replace_quarterly_portfolio_positions(
-        self,
-        run_id: str,
-        report_quarter: str,
-        rows: list[dict[str, object]],
-    ) -> None:
-        try:
-            self._conn.execute(
-                """
-                DELETE FROM quarterly_portfolio_position
-                WHERE run_id = ? AND report_quarter = ?
-                """,
-                (run_id, report_quarter),
-            )
-            if rows:
-                self._conn.executemany(
-                    """
-                    INSERT INTO quarterly_portfolio_position (
-                        run_id, report_quarter, instrument_key, ticker, sector, country, score_raw, score_risk,
-                        target_weight, weight_capped, passed_filters, filter_reasons_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            run_id,
-                            report_quarter,
-                            str(item["instrument_key"]),
-                            str(item["ticker"]),
-                            (item.get("sector") if isinstance(item.get("sector"), str) else None),
-                            (item.get("country") if isinstance(item.get("country"), str) else None),
-                            float(item["score_raw"]),
-                            float(item["score_risk"]),
-                            float(item["target_weight"]),
-                            float(item["weight_capped"]),
-                            1 if bool(item["passed_filters"]) else 0,
-                            json.dumps(
-                                [
-                                    value
-                                    for value in item.get("filter_reasons", [])
-                                    if isinstance(value, str)
-                                ],
-                                separators=(",", ":"),
-                                ensure_ascii=True,
-                            ),
-                        )
-                        for item in rows
-                    ],
-                )
-            self._conn.commit()
-        except (sqlite3.Error, TypeError, ValueError) as exc:
-            raise StateStoreError(
-                f"Failed to replace quarterly portfolio positions for run {run_id}, quarter {report_quarter}: {exc}"
-            ) from exc
-
-    def replace_quarterly_return_series(
-        self,
-        run_id: str,
-        rows: list[dict[str, object]],
-    ) -> None:
-        try:
-            self._conn.execute("DELETE FROM quarterly_return_series WHERE run_id = ?", (run_id,))
-            if rows:
-                self._conn.executemany(
-                    """
-                    INSERT INTO quarterly_return_series (
-                        run_id, date, strategy_gross_return, strategy_net_return, benchmark_return, turnover
-                    ) VALUES (?, ?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            run_id,
-                            str(item["date"]),
-                            float(item["strategy_gross_return"]),
-                            float(item["strategy_net_return"]),
-                            float(item["benchmark_return"]),
-                            float(item["turnover"]),
-                        )
-                        for item in rows
-                    ],
-                )
-            self._conn.commit()
-        except (sqlite3.Error, TypeError, ValueError) as exc:
-            raise StateStoreError(f"Failed to replace quarterly return series for run {run_id}: {exc}") from exc
-
-    def replace_quarterly_kpis(
-        self,
-        run_id: str,
-        rows: list[dict[str, object]],
-    ) -> None:
-        try:
-            self._conn.execute("DELETE FROM quarterly_kpi WHERE run_id = ?", (run_id,))
-            if rows:
-                self._conn.executemany(
-                    """
-                    INSERT INTO quarterly_kpi (
-                        run_id, metric, scope, scope_key, value
-                    ) VALUES (?, ?, ?, ?, ?)
-                    """,
-                    [
-                        (
-                            run_id,
-                            str(item["metric"]),
-                            str(item["scope"]),
-                            (item.get("scope_key") if isinstance(item.get("scope_key"), str) else None),
-                            float(item["value"]),
-                        )
-                        for item in rows
-                    ],
-                )
-            self._conn.commit()
-        except (sqlite3.Error, TypeError, ValueError) as exc:
-            raise StateStoreError(f"Failed to replace quarterly KPI rows for run {run_id}: {exc}") from exc
-
-    def list_quarterly_kpi_rows(self, run_id: str) -> list[dict[str, object]]:
-        try:
-            rows = self._conn.execute(
-                """
-                SELECT metric, scope, scope_key, value
-                FROM quarterly_kpi
-                WHERE run_id = ?
-                ORDER BY scope ASC, metric ASC, scope_key ASC
-                """,
-                (run_id,),
-            ).fetchall()
-            return [
-                {
-                    "metric": cast(str, row["metric"]),
-                    "scope": cast(str, row["scope"]),
-                    "scope_key": (row["scope_key"] if isinstance(row["scope_key"], str) else None),
-                    "value": float(row["value"]),
-                }
-                for row in rows
-            ]
-        except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to list quarterly KPI rows for run {run_id}: {exc}") from exc
-
     def clear_state(self) -> int:
         try:
             cursor_state = self._conn.execute("DELETE FROM manager_state")
             cursor_snapshot = self._conn.execute("DELETE FROM manager_quarter_snapshot")
             cursor_trend_run = self._conn.execute("DELETE FROM trend_run")
             cursor_trend_signal = self._conn.execute("DELETE FROM trend_stock_signal")
-            cursor_pipeline_run = self._conn.execute("DELETE FROM quarterly_pipeline_run")
-            cursor_pipeline_positions = self._conn.execute("DELETE FROM quarterly_portfolio_position")
-            cursor_pipeline_returns = self._conn.execute("DELETE FROM quarterly_return_series")
-            cursor_pipeline_kpi = self._conn.execute("DELETE FROM quarterly_kpi")
             self._conn.commit()
             return (
                 cursor_state.rowcount
                 + cursor_snapshot.rowcount
                 + cursor_trend_run.rowcount
                 + cursor_trend_signal.rowcount
-                + cursor_pipeline_run.rowcount
-                + cursor_pipeline_positions.rowcount
-                + cursor_pipeline_returns.rowcount
-                + cursor_pipeline_kpi.rowcount
             )
         except sqlite3.Error as exc:
             raise StateStoreError(f"Failed to clear state store at {self._db_path}: {exc}") from exc

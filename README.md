@@ -38,19 +38,6 @@ Optional:
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
 - `TREND_BLEND_MODE` (`tactical` by default; also supports `portfolio`)
 - `TREND_LIVE_PRICES_SYMBOLS_FILE` (symbol map for live price fetch from `stooq`, default `config/cusip_tickers.json`)
-- Quarterly pipeline options:
-  - `PIPELINE_TOP_K` (default `20`)
-  - `PIPELINE_MIN_CONF` (default `0.45`)
-  - `PIPELINE_MIN_OOS_QUARTERS` (default `8`; minimum history threshold enforced before pipeline run)
-  - `PIPELINE_HOLD_QUARTERS` (default `2`)
-  - `PIPELINE_POSITION_CAP` (default `0.07`)
-  - `PIPELINE_SECTOR_CAP` (default `0.30`)
-  - `PIPELINE_ADV20_USD_MIN` (default `3000000`)
-  - `PIPELINE_PRICE_MIN` (default `5`)
-  - `PIPELINE_COST_BPS_PER_SIDE` (default `10`)
-  - `PIPELINE_REPORT_DIR` (default `reports/quarterly`)
-  - `SYMBOL_METADATA_FILE` (default `config/symbol_metadata.json`)
-  - `PIPELINE_FAIL_ON_QUALITY` (optional CSV from `WATCH,FAIL`; when set, CLI exits non-zero for listed quality statuses)
 
 Paths in `.env` may be relative to the repo root.
 For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
@@ -116,9 +103,6 @@ python -m tracker --show-trends-detailed
 python -m tracker --show-trends-only
 python -m tracker --show-trends-only --trends-quarter 2025Q4
 python -m tracker --test-notification
-python -m tracker --run-quarterly-pipeline
-python -m tracker --run-quarterly-pipeline --pipeline-quarter 2025Q4
-python -m tracker --run-quarterly-pipeline --pipeline-dry-run-report
 python -m tracker --backfill-trend-history
 python -m tracker --backfill-trend-history --backfill-from-quarter 2023Q1 --backfill-to-quarter 2024Q4
 python -m tracker --backfill-trend-history --backfill-force --backfill-include-latest
@@ -147,7 +131,7 @@ Flag reference:
   Ideas output for buy/sell sections is capped at 8 rows per section.
 - `--show-trends-only`
   Prints the detailed trends table directly from existing SQLite signals and exits.
-  Does not execute SEC polling, snapshot sync, trend recompute, notifications, backfill, or quarterly pipeline.
+  Does not execute SEC polling, snapshot sync, trend recompute, notifications, or backfill.
   Uses the same related options:
   `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
   Ideas output for buy/sell sections is capped at 8 rows per section.
@@ -157,17 +141,6 @@ Flag reference:
 - `--test-notification`
   Sends a test notification immediately through configured notifiers and exits.
   Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
-- `--run-quarterly-pipeline`
-  Runs an additive research pipeline: risk-filter -> portfolio -> walk-forward backtest -> KPI report.
-  Entry timing uses actual filings availability: `max(filing_date across managers for quarter) + 1 day`, then snapped to next trading day.
-  Tracker now syncs a larger snapshot history window (`PIPELINE_MIN_OOS_QUARTERS + 2`, at least 9 quarters) for stable sample coverage.
-  If trend history before selected `--pipeline-quarter` is short, tracker auto-runs
-  historical backfill first to seed missing trend quarters, then re-checks threshold.
-  If threshold is still not met, pipeline is not started and CLI exits with non-zero code.
-- `--pipeline-quarter`
-  Optional `YYYYQn` target quarter for quarterly pipeline. Default uses latest trend quarter available in DB.
-- `--pipeline-dry-run-report`
-  Runs quarterly pipeline and writes report files without persisting quarterly pipeline tables in SQLite.
 - `--backfill-trend-history`
   Runs a separate historical trend backfill mode. It does not execute the daily notify flow.
 - `--backfill-from-quarter`, `--backfill-to-quarter`  
