@@ -11,14 +11,14 @@ from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
 
 
-def _sample_position(*, cusip: str, value: int) -> list[dict[str, int | str]]:
+def _sample_position(*, cusip: str, value: int, shares: int) -> list[dict[str, int | str]]:
     return [
         {
             "name": "Sample Issuer",
             "title": "COM",
             "cusip": cusip,
             "value": value,
-            "shares": 100,
+            "shares": shares,
         }
     ]
 
@@ -87,6 +87,10 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
             ],
         )
 
+        share_totals_by_quarter = {
+            "2025Q3": {"0000000001": 1_000, "0000000002": 2_000, "0000000003": 3_000},
+            "2025Q4": {"0000000001": 1_200, "0000000002": 2_050, "0000000003": 2_500, "0000000004": 900},
+        }
         for quarter, values in (
             (
                 "2025Q3",
@@ -107,7 +111,11 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
                     acceptance_datetime="2026-02-14T10:00:00Z",
                     accession=f"{cik}-{quarter}",
                     source_form="13F-HR",
-                    positions=_sample_position(cusip="111111111", value=10_000),
+                    positions=_sample_position(
+                        cusip="111111111",
+                        value=10_000,
+                        shares=share_totals_by_quarter[quarter][cik],
+                    ),
                     aum_value_k=aum_value_k,
                 )
     finally:
@@ -139,6 +147,12 @@ def test_compute_portfolio_value_trend_summary_classifies_growth_hold_reduction(
     assert summary.reducing_managers == 1
     assert summary.previous_total_value_k == 600_000_000_000
     assert summary.current_total_value_k == 577_000_000_000
+    assert summary.shares_analyzed_managers == 3
+    assert summary.shares_growing_managers == 1
+    assert summary.shares_holding_managers == 1
+    assert summary.shares_reducing_managers == 1
+    assert summary.previous_total_shares == 6_000
+    assert summary.current_total_shares == 5_750
 
 
 def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
@@ -170,6 +184,10 @@ def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Managers analyzed: 3/4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
+    assert "Managers analyzed (Shares): 3/3" in captured.out
+    assert "Aggregate portfolio shares: 6,000 -> 5,750 (-4.2% Holding)" in captured.out
+    assert "Value Managers" in captured.out
+    assert "Shares Managers" in captured.out
     assert "Growing" in captured.out
     assert "Holding" in captured.out
     assert "Reducing" in captured.out

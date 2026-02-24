@@ -32,6 +32,7 @@ SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
 PORTFOLIO_VALUE_HOLD_BAND = 0.075
+PORTFOLIO_SHARES_HOLD_BAND = 0.075
 PIPELINE_AUTO_BACKFILL_MIN_QUARTERS = 8
 PIPELINE_HARD_FAIL_STATUSES = {
     "invalid_as_of_quarter",
@@ -56,6 +57,12 @@ class _PortfolioValueTrendSummary:
     reducing_managers: int
     previous_total_value_k: int
     current_total_value_k: int
+    shares_analyzed_managers: int
+    shares_growing_managers: int
+    shares_holding_managers: int
+    shares_reducing_managers: int
+    previous_total_shares: int
+    current_total_shares: int
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -201,9 +208,21 @@ def _portfolio_value_direction(change_ratio: float) -> str:
     return "Holding"
 
 
+def _portfolio_shares_direction(change_ratio: float) -> str:
+    if change_ratio > PORTFOLIO_SHARES_HOLD_BAND:
+        return "Growing"
+    if change_ratio < -PORTFOLIO_SHARES_HOLD_BAND:
+        return "Reducing"
+    return "Holding"
+
+
 def _format_value_k(value_k: int) -> str:
     value_billions = round(value_k / 1_000_000_000)
     return f"${value_billions:,}B"
+
+
+def _format_int(value: int) -> str:
+    return f"{value:,}"
 
 
 def _format_signed_ratio(value: float) -> str:
@@ -238,6 +257,22 @@ def _compute_portfolio_value_trend_summary(
     reducing_managers = 0
     previous_total_value_k = 0
     current_total_value_k = 0
+    shares_analyzed_managers = 0
+    shares_growing_managers = 0
+    shares_holding_managers = 0
+    shares_reducing_managers = 0
+    previous_total_shares = 0
+    current_total_shares = 0
+
+    def _total_snapshot_shares(snapshot: Any) -> int | None:
+        total_shares = 0
+        has_shares = False
+        for position in snapshot.positions:
+            shares = position.get("shares")
+            if isinstance(shares, int) and shares > 0:
+                total_shares += shares
+                has_shares = True
+        return total_shares if has_shares else None
 
     for cik in selected_ciks:
         current_snapshot = snapshot_by_key.get((cik, report_quarter))
@@ -262,6 +297,21 @@ def _compute_portfolio_value_trend_summary(
         else:
             holding_managers += 1
 
+        previous_shares = _total_snapshot_shares(previous_snapshot)
+        current_shares = _total_snapshot_shares(current_snapshot)
+        if previous_shares is not None and current_shares is not None:
+            shares_analyzed_managers += 1
+            previous_total_shares += previous_shares
+            current_total_shares += current_shares
+            shares_change_ratio = _portfolio_value_change_ratio(previous_shares, current_shares)
+            shares_direction = _portfolio_shares_direction(shares_change_ratio)
+            if shares_direction == "Growing":
+                shares_growing_managers += 1
+            elif shares_direction == "Reducing":
+                shares_reducing_managers += 1
+            else:
+                shares_holding_managers += 1
+
     return _PortfolioValueTrendSummary(
         report_quarter=report_quarter,
         previous_quarter=previous_quarter,
@@ -274,6 +324,12 @@ def _compute_portfolio_value_trend_summary(
         reducing_managers=reducing_managers,
         previous_total_value_k=previous_total_value_k,
         current_total_value_k=current_total_value_k,
+        shares_analyzed_managers=shares_analyzed_managers,
+        shares_growing_managers=shares_growing_managers,
+        shares_holding_managers=shares_holding_managers,
+        shares_reducing_managers=shares_reducing_managers,
+        previous_total_shares=previous_total_shares,
+        current_total_shares=current_total_shares,
     )
 
 
@@ -308,15 +364,60 @@ def _print_portfolio_value_trend_summary(
         f"{_format_value_k(summary.previous_total_value_k)} -> {_format_value_k(summary.current_total_value_k)} "
         f"({_format_signed_ratio(aggregate_change_ratio)} {aggregate_direction})"
     )
+    if summary.shares_analyzed_managers > 0:
+        print(f"Managers analyzed (Shares): {summary.shares_analyzed_managers}/{summary.analyzed_managers}")
+        aggregate_shares_change_ratio = _portfolio_value_change_ratio(
+            summary.previous_total_shares,
+            summary.current_total_shares,
+        )
+        aggregate_shares_direction = _portfolio_shares_direction(aggregate_shares_change_ratio)
+        print(
+            "Aggregate portfolio shares: "
+            f"{_format_int(summary.previous_total_shares)} -> {_format_int(summary.current_total_shares)} "
+            f"({_format_signed_ratio(aggregate_shares_change_ratio)} {aggregate_shares_direction})"
+        )
 
-    def _share(count: int) -> float:
-        return count / summary.analyzed_managers
+    headers = ["Direction", "Value Managers", "Value Share", "Shares Managers", "Shares Share"]
 
-    headers = ["Direction", "Managers", "Share"]
+    def _format_direction_cells(*, count: int, total: int) -> tuple[str, str]:
+        if total <= 0:
+            return ("n/a", "n/a")
+        return (str(count), _format_ratio(count / total))
+
+    growing_shares_count, growing_shares_share = _format_direction_cells(
+        count=summary.shares_growing_managers,
+        total=summary.shares_analyzed_managers,
+    )
+    holding_shares_count, holding_shares_share = _format_direction_cells(
+        count=summary.shares_holding_managers,
+        total=summary.shares_analyzed_managers,
+    )
+    reducing_shares_count, reducing_shares_share = _format_direction_cells(
+        count=summary.shares_reducing_managers,
+        total=summary.shares_analyzed_managers,
+    )
     rows = [
-        ["Growing", str(summary.growing_managers), _format_ratio(_share(summary.growing_managers))],
-        ["Holding", str(summary.holding_managers), _format_ratio(_share(summary.holding_managers))],
-        ["Reducing", str(summary.reducing_managers), _format_ratio(_share(summary.reducing_managers))],
+        [
+            "Growing",
+            str(summary.growing_managers),
+            _format_ratio(summary.growing_managers / summary.analyzed_managers),
+            growing_shares_count,
+            growing_shares_share,
+        ],
+        [
+            "Holding",
+            str(summary.holding_managers),
+            _format_ratio(summary.holding_managers / summary.analyzed_managers),
+            holding_shares_count,
+            holding_shares_share,
+        ],
+        [
+            "Reducing",
+            str(summary.reducing_managers),
+            _format_ratio(summary.reducing_managers / summary.analyzed_managers),
+            reducing_shares_count,
+            reducing_shares_share,
+        ],
     ]
     print(_format_table(headers, rows))
 
