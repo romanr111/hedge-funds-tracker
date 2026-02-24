@@ -365,7 +365,6 @@ def _print_portfolio_value_trend_summary(
         f"({_format_signed_ratio(aggregate_change_ratio)} {aggregate_direction})"
     )
     if summary.shares_analyzed_managers > 0:
-        print(f"Managers analyzed (Shares): {summary.shares_analyzed_managers}/{summary.analyzed_managers}")
         aggregate_shares_change_ratio = _portfolio_value_change_ratio(
             summary.previous_total_shares,
             summary.current_total_shares,
@@ -377,49 +376,52 @@ def _print_portfolio_value_trend_summary(
             f"({_format_signed_ratio(aggregate_shares_change_ratio)} {aggregate_shares_direction})"
         )
 
-    headers = ["Direction", "Value Managers", "Value Share", "Shares Managers", "Shares Share"]
-
-    def _format_direction_cells(*, count: int, total: int) -> tuple[str, str]:
-        if total <= 0:
-            return ("n/a", "n/a")
-        return (str(count), _format_ratio(count / total))
-
-    growing_shares_count, growing_shares_share = _format_direction_cells(
-        count=summary.shares_growing_managers,
-        total=summary.shares_analyzed_managers,
-    )
-    holding_shares_count, holding_shares_share = _format_direction_cells(
-        count=summary.shares_holding_managers,
-        total=summary.shares_analyzed_managers,
-    )
-    reducing_shares_count, reducing_shares_share = _format_direction_cells(
-        count=summary.shares_reducing_managers,
-        total=summary.shares_analyzed_managers,
-    )
-    rows = [
+    direction_headers = ["Direction", "Managers", "Share"]
+    value_rows = [
         [
             "Growing",
             str(summary.growing_managers),
             _format_ratio(summary.growing_managers / summary.analyzed_managers),
-            growing_shares_count,
-            growing_shares_share,
         ],
         [
             "Holding",
             str(summary.holding_managers),
             _format_ratio(summary.holding_managers / summary.analyzed_managers),
-            holding_shares_count,
-            holding_shares_share,
         ],
         [
             "Reducing",
             str(summary.reducing_managers),
             _format_ratio(summary.reducing_managers / summary.analyzed_managers),
-            reducing_shares_count,
-            reducing_shares_share,
         ],
     ]
-    print(_format_table(headers, rows))
+    print()
+    print("Value Direction Breakdown")
+    print(_format_table(direction_headers, value_rows))
+
+    if summary.shares_analyzed_managers <= 0:
+        return
+    if summary.shares_analyzed_managers != summary.analyzed_managers:
+        print(f"Shares coverage: {summary.shares_analyzed_managers}/{summary.analyzed_managers}")
+    shares_rows = [
+        [
+            "Growing",
+            str(summary.shares_growing_managers),
+            _format_ratio(summary.shares_growing_managers / summary.shares_analyzed_managers),
+        ],
+        [
+            "Holding",
+            str(summary.shares_holding_managers),
+            _format_ratio(summary.shares_holding_managers / summary.shares_analyzed_managers),
+        ],
+        [
+            "Reducing",
+            str(summary.shares_reducing_managers),
+            _format_ratio(summary.shares_reducing_managers / summary.shares_analyzed_managers),
+        ],
+    ]
+    print()
+    print("Shares Direction Breakdown")
+    print(_format_table(direction_headers, shares_rows))
 
 
 def _print_detailed_trend_table(

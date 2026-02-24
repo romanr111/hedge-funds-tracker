@@ -184,10 +184,10 @@ def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Managers analyzed: 3/4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
-    assert "Managers analyzed (Shares): 3/3" in captured.out
     assert "Aggregate portfolio shares: 6,000 -> 5,750 (-4.2% Holding)" in captured.out
-    assert "Value Managers" in captured.out
-    assert "Shares Managers" in captured.out
+    assert "Value Direction Breakdown" in captured.out
+    assert "Shares Direction Breakdown" in captured.out
+    assert "Managers analyzed (Shares):" not in captured.out
     assert "Growing" in captured.out
     assert "Holding" in captured.out
     assert "Reducing" in captured.out
