@@ -64,6 +64,7 @@ class ManagerConfig:
 class PipelineConfig:
     top_k: int = 20
     min_conf: float = 0.45
+    min_oos_quarters: int = 8
     hold_quarters: int = 2
     position_cap: float = 0.07
     sector_cap: float = 0.30
@@ -224,6 +225,7 @@ def load_config(
     pipeline = PipelineConfig(
         top_k=_env_int("PIPELINE_TOP_K", 20, minimum=1),
         min_conf=_env_float("PIPELINE_MIN_CONF", 0.45, minimum=0.0, maximum=1.0),
+        min_oos_quarters=_env_int("PIPELINE_MIN_OOS_QUARTERS", 8, minimum=2),
         hold_quarters=_env_int("PIPELINE_HOLD_QUARTERS", 2, minimum=1),
         position_cap=_env_float("PIPELINE_POSITION_CAP", 0.07, minimum=0.0, maximum=1.0),
         sector_cap=_env_float("PIPELINE_SECTOR_CAP", 0.30, minimum=0.0, maximum=1.0),

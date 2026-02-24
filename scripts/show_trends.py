@@ -10,6 +10,7 @@ from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
+IDEAS_OUTPUT_MAX_ROWS = 8
 
 
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -25,23 +26,6 @@ def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     output = [render_line(headers), separator]
     output.extend(render_line(row) for row in rows)
     return "\n".join(output)
-
-
-def _contributors_preview(contributors_json: str) -> str:
-    try:
-        payload = json.loads(contributors_json)
-    except json.JSONDecodeError:
-        return "-"
-    if not isinstance(payload, list) or not payload:
-        return "-"
-    first = payload[0]
-    if not isinstance(first, dict):
-        return "-"
-    manager_name = first.get("manager_name")
-    signal_value = first.get("signal_value")
-    if isinstance(manager_name, str):
-        return f"{manager_name} ({signal_value})"
-    return "-"
 
 
 def _load_symbol_map(path: Path) -> dict[str, str]:
@@ -88,27 +72,58 @@ def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> Non
 
 
 def _action_for_signal(signal: Any) -> str:
+    target = _target_confidence_for_signal(signal)
     regime = (signal.regime or "").upper()
     confidence = float(signal.confidence)
-    if regime == "STRONG_BUY" and confidence >= 0.65:
-        return "ACTION_BUY"
-    if regime in {"REVERSAL_BUY", "EMERGING_BUY"} and confidence >= 0.45:
-        return "WATCH_BUY"
-    if regime == "WEAKENING_BUY":
-        return "WEAKENING_BUY"
-    if regime == "STRONG_SELL" and confidence >= 0.65:
-        return "ACTION_SELL"
-    if regime in {"REVERSAL_SELL", "EMERGING_SELL"} and confidence >= SELL_TABLE_MIN_CONF:
-        return "WATCH_SELL"
-    if regime == "WEAKENING_SELL":
-        return "WEAKENING_SELL"
+    target_gap_pp = (target - confidence) * 100.0
+
+    if regime.startswith("STRONG_") and confidence >= target:
+        if regime.endswith("_BUY"):
+            return "BUY"
+        if regime.endswith("_SELL"):
+            return "SELL"
+    has_direction = regime.endswith("_BUY") or regime.endswith("_SELL")
+    if has_direction and target_gap_pp <= 5.0 + 1e-9:
+        return "INTERESTING_IDEA"
     return "MONITOR"
+
+
+def _setup_for_signal(signal: Any) -> str:
+    regime = (signal.regime or "").upper()
+    if regime.startswith("STRONG_"):
+        return "Strong"
+    if regime.startswith("REVERSAL_"):
+        return "Reversal"
+    if regime.startswith("EMERGING_"):
+        return "Emerging"
+    if regime.startswith("WEAKENING_"):
+        return "Weakening"
+    return "Unknown"
+
+
+def _target_confidence_for_signal(signal: Any) -> float:
+    regime = (signal.regime or "").upper()
+    if regime.startswith("STRONG_"):
+        return 0.65
+    if regime in {"REVERSAL_SELL", "EMERGING_SELL"}:
+        return SELL_TABLE_MIN_CONF
+    if regime in {"REVERSAL_BUY", "EMERGING_BUY"}:
+        return 0.45
+    if regime.startswith("WEAKENING_"):
+        return 0.50
+    return 0.50
+
+
+def _conviction_target_for_signal(signal: Any) -> str:
+    confidence_pct = round(float(signal.confidence) * 100)
+    target_pct = round(_target_confidence_for_signal(signal) * 100)
+    return f"{confidence_pct}% (Target: {target_pct}%)"
 
 
 def _freshness_icon(signal: Any) -> str:
     freshness_ok = getattr(signal, "freshness_ok", None)
     if freshness_ok is None:
-        return "-"
+        return "❌"
     return "✅" if bool(freshness_ok) else "❌"
 
 
@@ -116,7 +131,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Print trend signals by quarter.")
     parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB (default: data/tracker.sqlite3)")
     parser.add_argument("--quarter", help="Report quarter in format YYYYQn (example: 2025Q4).")
-    parser.add_argument("--limit", type=int, default=15, help="Max rows per section (default: 15).")
+    parser.add_argument("--limit", type=int, default=IDEAS_OUTPUT_MAX_ROWS, help="Max rows per section (default: 8, max: 8).")
     parser.add_argument(
         "--min-conf",
         type=float,
@@ -159,6 +174,8 @@ def main() -> int:
             print(f"No trend signals found for {quarter}.")
             return 0
 
+        effective_limit = max(1, min(args.limit, IDEAS_OUTPUT_MAX_ROWS))
+
         buy = sorted(
             [
                 item
@@ -172,7 +189,7 @@ def main() -> int:
             ],
             key=lambda item: item.trend_ewma,
             reverse=True,
-        )[: args.limit]
+        )[:effective_limit]
         sell_min_conf = min(args.min_conf, SELL_TABLE_MIN_CONF)
         sell = sorted(
             [
@@ -181,7 +198,7 @@ def main() -> int:
                 if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
             ],
             key=lambda item: item.trend_ewma,
-        )[: args.limit]
+        )[:effective_limit]
         reversals = sorted(
             [
                 item
@@ -190,44 +207,31 @@ def main() -> int:
             ],
             key=lambda item: abs(item.trend_delta),
             reverse=True,
-        )[: args.limit]
+        )[:effective_limit]
 
         print(f"Report quarter: {quarter}")
         print(f"Signals total: {len(signals)}")
 
         headers = [
-            "action",
-            "ticker",
-            "regime",
-            "trend",
-            "delta",
-            "impulse",
-            "accum",
-            "conf",
-            "breadth(+/-)",
-            "issuer",
-            "top contributor",
+            "Ticker",
+            "Action",
+            "Setup (Regime)",
+            "Conviction / Target",
+            "Trend",
+            "Consensus (+/-)",
+            "Data Fresh",
         ]
-        freshness_enabled = any(getattr(item, "freshness_ok", None) is not None for item in signals)
-        if freshness_enabled:
-            headers.append("freshness indicator")
 
         def _row(item: Any) -> list[str]:
             row = [
-                _action_for_signal(item),
                 _ticker_for_signal(item, symbol_map),
-                item.regime,
-                f"{item.trend_ewma:.6f}",
-                f"{item.trend_delta:.6f}",
-                f"{item.impulse_score:.6f}",
-                f"{item.accumulation_score:.6f}",
-                f"{item.confidence:.3f}",
+                _action_for_signal(item),
+                _setup_for_signal(item),
+                _conviction_target_for_signal(item),
+                f"{item.trend_ewma:.4f}",
                 f"{item.buy_managers}/{item.sell_managers}",
-                item.issuer_name or "-",
-                _contributors_preview(item.contributors_json),
+                _freshness_icon(item),
             ]
-            if freshness_enabled:
-                row.append(_freshness_icon(item))
             return row
 
         buy_rows = [

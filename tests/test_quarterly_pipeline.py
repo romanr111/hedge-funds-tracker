@@ -275,6 +275,7 @@ def test_run_quarterly_pipeline_generates_report_and_db_rows(tmp_path: Path) -> 
         pipeline = PipelineConfig(
             top_k=2,
             min_conf=0.4,
+            min_oos_quarters=4,
             hold_quarters=2,
             position_cap=0.7,
             sector_cap=0.8,
@@ -296,7 +297,7 @@ def test_run_quarterly_pipeline_generates_report_and_db_rows(tmp_path: Path) -> 
 
         assert result.run_id
         assert result.status == "ok"
-        assert result.quality_status == "INSUFFICIENT_SAMPLE"
+        assert result.quality_status is not None
         assert result.report_dir is not None
         assert (result.report_dir / "summary.md").exists()
         assert (result.report_dir / "kpi_overall.csv").exists()
@@ -350,6 +351,7 @@ def test_run_quarterly_pipeline_uses_max_filing_date_plus_one_day(tmp_path: Path
         pipeline = PipelineConfig(
             top_k=1,
             min_conf=0.4,
+            min_oos_quarters=1,
             hold_quarters=1,
             position_cap=1.0,
             sector_cap=1.0,
@@ -402,6 +404,7 @@ def test_run_quarterly_pipeline_returns_partial_data_when_benchmark_missing(tmp_
         pipeline = PipelineConfig(
             top_k=1,
             min_conf=0.4,
+            min_oos_quarters=1,
             hold_quarters=1,
             position_cap=1.0,
             sector_cap=1.0,

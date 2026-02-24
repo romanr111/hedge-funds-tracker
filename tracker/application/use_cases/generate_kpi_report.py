@@ -37,6 +37,7 @@ def _write_csv(path: Path, headers: list[str], rows: list[list[object]]) -> None
 
 def _quality_status(
     *,
+    min_oos_quarters: int,
     overall_kpis: list[PipelineKPI],
     quarter_kpis: list[PipelineKPI],
     return_rows: list[dict[str, object]],
@@ -44,8 +45,8 @@ def _quality_status(
     overall = {item.metric: item.value for item in overall_kpis if item.scope == "overall"}
     observed_quarters = {item.scope_key for item in quarter_kpis if item.scope == "quarter" and item.scope_key}
 
-    if len(observed_quarters) < 8:
-        return ("INSUFFICIENT_SAMPLE", ["oos_quarters_below_8"])
+    if len(observed_quarters) < min_oos_quarters:
+        return ("INSUFFICIENT_SAMPLE", [f"oos_quarters_below_{min_oos_quarters}"])
 
     benchmark_returns = [float(item["benchmark_return"]) for item in return_rows]
     benchmark_mdd = _max_drawdown(benchmark_returns)
@@ -153,6 +154,7 @@ def generate_kpi_report(
     (report_dir / "config_snapshot.json").write_text(json.dumps(config_payload, indent=2, ensure_ascii=True))
 
     quality_status, failed_checks = _quality_status(
+        min_oos_quarters=pipeline.min_oos_quarters,
         overall_kpis=overall_kpis,
         quarter_kpis=quarter_kpis,
         return_rows=return_rows,

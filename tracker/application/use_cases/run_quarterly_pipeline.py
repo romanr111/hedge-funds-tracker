@@ -113,6 +113,14 @@ def run_quarterly_pipeline(
             report_dir=None,
             quality_status=None,
         )
+    if len(quarters) < pipeline.min_oos_quarters:
+        return QuarterlyPipelineResult(
+            run_id="",
+            status="insufficient_input_quarters",
+            as_of_quarter=resolved_as_of,
+            report_dir=None,
+            quality_status=None,
+        )
 
     run_id = _pipeline_run_id(resolved_as_of)
     created_at = datetime.now(timezone.utc).isoformat()

@@ -41,6 +41,7 @@ Optional:
 - Quarterly pipeline options:
   - `PIPELINE_TOP_K` (default `20`)
   - `PIPELINE_MIN_CONF` (default `0.45`)
+  - `PIPELINE_MIN_OOS_QUARTERS` (default `8`; minimum history threshold enforced before pipeline run)
   - `PIPELINE_HOLD_QUARTERS` (default `2`)
   - `PIPELINE_POSITION_CAP` (default `0.07`)
   - `PIPELINE_SECTOR_CAP` (default `0.30`)
@@ -112,6 +113,8 @@ python -m tracker --notify_on_first_start clean_state
 python -m tracker --dry-run
 python -m tracker --force-trend-recompute
 python -m tracker --show-trends-detailed
+python -m tracker --show-trends-only
+python -m tracker --show-trends-only --trends-quarter 2025Q4
 python -m tracker --test-notification
 python -m tracker --run-quarterly-pipeline
 python -m tracker --run-quarterly-pipeline --pipeline-quarter 2025Q4
@@ -141,6 +144,13 @@ Flag reference:
   Always prints the detailed trends table after the run (same style as `scripts/show_trends.py`), including non-interactive output.
   Related options:
   `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
+  Ideas output for buy/sell sections is capped at 8 rows per section.
+- `--show-trends-only`
+  Prints the detailed trends table directly from existing SQLite signals and exits.
+  Does not execute SEC polling, snapshot sync, trend recompute, notifications, backfill, or quarterly pipeline.
+  Uses the same related options:
+  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
+  Ideas output for buy/sell sections is capped at 8 rows per section.
 - `--trend-live-prices-symbols-file`
   JSON map used for live prices from `stooq` (key: CUSIP/instrument_key, value: ticker),
   default `config/cusip_tickers.json`.
@@ -150,8 +160,10 @@ Flag reference:
 - `--run-quarterly-pipeline`
   Runs an additive research pipeline: risk-filter -> portfolio -> walk-forward backtest -> KPI report.
   Entry timing uses actual filings availability: `max(filing_date across managers for quarter) + 1 day`, then snapped to next trading day.
-  If trend history before selected `--pipeline-quarter` is short (less than 8 quarters), tracker auto-runs
-  historical backfill first to seed missing trend quarters, then runs pipeline.
+  Tracker now syncs a larger snapshot history window (`PIPELINE_MIN_OOS_QUARTERS + 2`, at least 9 quarters) for stable sample coverage.
+  If trend history before selected `--pipeline-quarter` is short, tracker auto-runs
+  historical backfill first to seed missing trend quarters, then re-checks threshold.
+  If threshold is still not met, pipeline is not started and CLI exits with non-zero code.
 - `--pipeline-quarter`
   Optional `YYYYQn` target quarter for quarterly pipeline. Default uses latest trend quarter available in DB.
 - `--pipeline-dry-run-report`
@@ -169,6 +181,8 @@ Interactive UX note:
 - In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints the detailed trend table by default.
 - To force the same detailed output in non-interactive runs, use:
   `python -m tracker --show-trends-detailed`
+- To print table only from already saved DB signals (without data collection), use:
+  `python -m tracker --show-trends-only`
 - You can also print the same format directly with:
   `python scripts/show_trends.py --db <DB_PATH> --quarter <YYYYQn>`
 
@@ -196,6 +210,7 @@ python scripts/show_state.py --db data/tracker.sqlite3
 For each instrument inside manager snapshots:
 - Convert positions to portfolio weights.
 - Compute trade flow (`trade_dw`) from shares/weights delta with corporate-action guard.
+- Ignore shares-only noise when absolute shares change is `<= 1.5%`.
 - Robust-normalize flow with MAD-based sigma and clipped z-score.
 - Convert into manager signal contribution:
   - `signal_value = manager_weight_effective * position_weight * flow_participation * tanh(z / 2)`
@@ -235,6 +250,10 @@ Final signal:
 - regime is classified from sign, persistence, gates, and delta (`STRONG_BUY`, `REVERSAL_SELL`, etc.).
 
 ### 6) Table actions (research, not auto-trading)
-- `ACTION_BUY`, `WATCH_BUY`, `MONITOR`
-- `WATCH_SELL`, `ACTION_SELL`, `MONITOR`
+- `BUY`, `SELL`, `INTERESTING_IDEA`, `MONITOR`
+- `BUY`/`SELL` = target reached for `Strong` setup.
+- `INTERESTING_IDEA` = direction exists and target gap is `<= 5` percentage points.
+- `MONITOR` = target gap is larger than `5` percentage points.
 - thresholds are confidence + regime based (see `tracker/interfaces/cli/main.py`).
+- recommended compact row:
+  - `Ticker | Action | Setup (Regime) | Conviction / Target | Trend | Consensus (+/-) | Data Fresh`
