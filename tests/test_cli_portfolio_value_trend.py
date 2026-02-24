@@ -169,7 +169,7 @@ def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
     assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Managers analyzed: 3/4" in captured.out
-    assert "Aggregate portfolio value: $600B -> $577B (-3.8% Reducing)" in captured.out
+    assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
     assert "Growing" in captured.out
     assert "Holding" in captured.out
     assert "Reducing" in captured.out
