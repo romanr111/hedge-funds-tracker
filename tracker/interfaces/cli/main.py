@@ -15,6 +15,7 @@ from tracker.application.ports.notifier import NotifierPort
 from tracker.application.use_cases.notify_quarterly_reports_completion import (
     notify_if_all_reports_published_for_current_quarter,
 )
+from tracker.application.use_cases.notify_trend_analysis_summary import notify_trend_analysis_summary
 from tracker.application.use_cases.backfill_trend_history import run_backfill_trend_history
 from tracker.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
 from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
@@ -602,6 +603,16 @@ def _main(logger: logging.Logger) -> int:
         help="Print detailed trends table from existing DB signals and exit (no sync/trend recompute).",
     )
     parser.add_argument(
+        "--send-trend-summary-from-db",
+        action="store_true",
+        help="Send trend Telegram summary from existing DB signals and exit (no sync/trend recompute).",
+    )
+    parser.add_argument(
+        "--send-trend-summary-force",
+        action="store_true",
+        help="Force resend trend Telegram summary even if this quarter was already notified.",
+    )
+    parser.add_argument(
         "--trends-quarter",
         help="Quarter for --show-trends-detailed/--show-trends-only in format YYYYQn. Default: computed/latest quarter.",
     )
@@ -657,6 +668,8 @@ def _main(logger: logging.Logger) -> int:
     )
     args = parser.parse_args()
     show_trends_only_flag = bool(getattr(args, "show_trends_only", False))
+    send_trend_summary_from_db_flag = bool(getattr(args, "send_trend_summary_from_db", False))
+    send_trend_summary_force_flag = bool(getattr(args, "send_trend_summary_force", False))
     backfill_trend_history_flag = bool(getattr(args, "backfill_trend_history", False))
     backfill_from_quarter = getattr(args, "backfill_from_quarter", None)
     backfill_to_quarter = getattr(args, "backfill_to_quarter", None)
@@ -675,11 +688,23 @@ def _main(logger: logging.Logger) -> int:
     if show_trends_only_flag and args.test_notification:
         logger.error("Cannot combine --show-trends-only with --test-notification")
         return 2
+    if send_trend_summary_from_db_flag and args.test_notification:
+        logger.error("Cannot combine --send-trend-summary-from-db with --test-notification")
+        return 2
     if show_trends_only_flag and args.clean_state == "clean_state":
         logger.error("Cannot combine --show-trends-only with clean_state")
         return 2
+    if send_trend_summary_from_db_flag and args.clean_state == "clean_state":
+        logger.error("Cannot combine --send-trend-summary-from-db with clean_state")
+        return 2
     if show_trends_only_flag and args.force_trend_recompute:
         logger.error("Cannot combine --show-trends-only with --force-trend-recompute")
+        return 2
+    if send_trend_summary_from_db_flag and args.force_trend_recompute:
+        logger.error("Cannot combine --send-trend-summary-from-db with --force-trend-recompute")
+        return 2
+    if send_trend_summary_force_flag and not send_trend_summary_from_db_flag:
+        logger.error("--send-trend-summary-force requires --send-trend-summary-from-db")
         return 2
     if args.trends_min_conf < 0 or args.trends_min_conf > 1:
         logger.error("--trends-min-conf must be between 0 and 1")
@@ -699,6 +724,12 @@ def _main(logger: logging.Logger) -> int:
             return 2
     if show_trends_only_flag and backfill_trend_history_flag:
         logger.error("Cannot combine --show-trends-only with --backfill-trend-history")
+        return 2
+    if send_trend_summary_from_db_flag and backfill_trend_history_flag:
+        logger.error("Cannot combine --send-trend-summary-from-db with --backfill-trend-history")
+        return 2
+    if show_trends_only_flag and send_trend_summary_from_db_flag:
+        logger.error("Cannot combine --show-trends-only with --send-trend-summary-from-db")
         return 2
     if not backfill_trend_history_flag and (
         backfill_from_quarter or backfill_to_quarter or backfill_force or backfill_include_latest
@@ -769,6 +800,47 @@ def _main(logger: logging.Logger) -> int:
                 "dry_run": args.dry_run,
                 "mode": "show_trends_only",
                 "report_quarter": quarter_for_table,
+            },
+        )
+        return 0
+
+    if send_trend_summary_from_db_flag:
+        quarter_for_summary = args.trends_quarter or runtime.store.get_latest_trend_quarter()
+        if quarter_for_summary is None:
+            print("No trend signals found.")
+        else:
+            managers = [Manager(name=manager_config.name, cik=manager_config.cik) for manager_config in config.managers]
+            notify_if_all_reports_published_for_current_quarter(
+                managers,
+                runtime.store,
+                runtime.notifiers,
+                dry_run=args.dry_run,
+                logger=logger,
+            )
+            notify_trend_analysis_summary(
+                runtime.store,
+                runtime.notifiers,
+                dry_run=args.dry_run,
+                trend_status="from_db",
+                report_quarter=quarter_for_summary,
+                manager_ciks=manager_ciks,
+                min_conf=args.trends_min_conf,
+                limit=args.trends_limit,
+                show_reversals=args.trends_show_reversals,
+                symbols_file=args.trends_symbols_file,
+                force_send=send_trend_summary_force_flag,
+                logger=logger,
+            )
+        runtime.store.close()
+        logger.info(
+            "Tracker run finished",
+            extra={
+                "finished_at_local": format_local_datetime(now_kyiv()),
+                "managers_count": len(config.managers),
+                "dry_run": args.dry_run,
+                "mode": "send_trend_summary_from_db",
+                "report_quarter": quarter_for_summary,
+                "force_send": send_trend_summary_force_flag,
             },
         )
         return 0
@@ -931,6 +1003,20 @@ def _main(logger: logging.Logger) -> int:
         logger=logger,
     )
 
+    notify_trend_analysis_summary(
+        runtime.store,
+        runtime.notifiers,
+        dry_run=args.dry_run,
+        trend_status=trend_result.status,
+        report_quarter=trend_result.report_quarter,
+        manager_ciks=manager_ciks,
+        min_conf=args.trends_min_conf,
+        limit=args.trends_limit,
+        show_reversals=args.trends_show_reversals,
+        symbols_file=args.trends_symbols_file,
+        force_send=False,
+        logger=logger,
+    )
     runtime.store.close()
     logger.info(
         "Tracker run finished",
