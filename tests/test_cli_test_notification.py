@@ -293,8 +293,9 @@ def test_prints_detailed_trend_table_when_ready_and_tty(monkeypatch: pytest.Monk
         limit: int = 15,
         show_reversals: bool = False,
         symbols_file: str = "config/cusip_tickers.json",
+        manager_ciks: list[str] | None = None,
     ) -> None:
-        del store, min_conf, limit, show_reversals, symbols_file
+        del store, min_conf, limit, show_reversals, symbols_file, manager_ciks
         printed_quarters.append(report_quarter)
 
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
@@ -381,8 +382,9 @@ def test_show_trends_detailed_flag_prints_detailed_table(monkeypatch: pytest.Mon
         limit: int = 15,
         show_reversals: bool = False,
         symbols_file: str = "config/cusip_tickers.json",
+        manager_ciks: list[str] | None = None,
     ) -> None:
-        del store, min_conf, limit, show_reversals, symbols_file
+        del store, min_conf, limit, show_reversals, symbols_file, manager_ciks
         detailed_quarters.append(report_quarter)
 
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
@@ -469,8 +471,9 @@ def test_show_trends_only_uses_existing_db_and_skips_daily_flow(monkeypatch: pyt
         limit: int = 15,
         show_reversals: bool = False,
         symbols_file: str = "config/cusip_tickers.json",
+        manager_ciks: list[str] | None = None,
     ) -> None:
-        del store, min_conf, limit, show_reversals, symbols_file
+        del store, min_conf, limit, show_reversals, symbols_file, manager_ciks
         detailed_quarters.append(report_quarter)
 
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)

@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,7 @@ from tracker.infrastructure.market import StooqPriceGateway
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
+PORTFOLIO_VALUE_HOLD_BAND = 0.02
 PIPELINE_AUTO_BACKFILL_MIN_QUARTERS = 8
 PIPELINE_HARD_FAIL_STATUSES = {
     "invalid_as_of_quarter",
@@ -39,6 +41,21 @@ PIPELINE_HARD_FAIL_STATUSES = {
     "insufficient_input_quarters",
     "partial_data",
 }
+
+
+@dataclass(frozen=True)
+class _PortfolioValueTrendSummary:
+    report_quarter: str
+    previous_quarter: str
+    selected_managers: int
+    analyzed_managers: int
+    missing_current: int
+    missing_previous: int
+    growing_managers: int
+    holding_managers: int
+    reducing_managers: int
+    previous_total_value_k: int
+    current_total_value_k: int
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -160,6 +177,158 @@ def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> Non
     print(_format_table(headers, rows))
 
 
+def _previous_report_quarter(report_quarter: str) -> str | None:
+    parsed = parse_report_quarter(report_quarter)
+    if parsed is None:
+        return None
+    year, quarter = parsed
+    if quarter == 1:
+        return f"{year - 1}Q4"
+    return f"{year}Q{quarter - 1}"
+
+
+def _portfolio_value_change_ratio(previous_value_k: int, current_value_k: int) -> float:
+    if previous_value_k <= 0:
+        return 0.0 if current_value_k <= 0 else 1.0
+    return (current_value_k - previous_value_k) / previous_value_k
+
+
+def _portfolio_value_direction(change_ratio: float) -> str:
+    if change_ratio > PORTFOLIO_VALUE_HOLD_BAND:
+        return "Growing"
+    if change_ratio < -PORTFOLIO_VALUE_HOLD_BAND:
+        return "Reducing"
+    return "Holding"
+
+
+def _format_value_k(value_k: int) -> str:
+    absolute_value = abs(value_k)
+    if absolute_value >= 1_000_000:
+        return f"${value_k / 1_000_000:.2f}B"
+    if absolute_value >= 1_000:
+        return f"${value_k / 1_000:.2f}M"
+    return f"${value_k:,}K"
+
+
+def _format_signed_ratio(value: float) -> str:
+    return f"{value * 100:+.1f}%"
+
+
+def _format_ratio(value: float) -> str:
+    return f"{value * 100:.1f}%"
+
+
+def _compute_portfolio_value_trend_summary(
+    store: Any,
+    report_quarter: str,
+    manager_ciks: list[str],
+) -> _PortfolioValueTrendSummary | None:
+    selected_ciks = [cik.strip() for cik in manager_ciks if cik and cik.strip()]
+    if not selected_ciks:
+        return None
+
+    previous_quarter = _previous_report_quarter(report_quarter)
+    if previous_quarter is None:
+        return None
+
+    snapshots = store.list_snapshots_for_quarters([previous_quarter, report_quarter], selected_ciks)
+    snapshot_by_key = {(snapshot.cik, snapshot.report_quarter): snapshot for snapshot in snapshots}
+
+    analyzed_managers = 0
+    missing_current = 0
+    missing_previous = 0
+    growing_managers = 0
+    holding_managers = 0
+    reducing_managers = 0
+    previous_total_value_k = 0
+    current_total_value_k = 0
+
+    for cik in selected_ciks:
+        current_snapshot = snapshot_by_key.get((cik, report_quarter))
+        if current_snapshot is None:
+            missing_current += 1
+            continue
+        previous_snapshot = snapshot_by_key.get((cik, previous_quarter))
+        if previous_snapshot is None:
+            missing_previous += 1
+            continue
+
+        analyzed_managers += 1
+        previous_total_value_k += previous_snapshot.aum_value_k
+        current_total_value_k += current_snapshot.aum_value_k
+
+        change_ratio = _portfolio_value_change_ratio(previous_snapshot.aum_value_k, current_snapshot.aum_value_k)
+        direction = _portfolio_value_direction(change_ratio)
+        if direction == "Growing":
+            growing_managers += 1
+        elif direction == "Reducing":
+            reducing_managers += 1
+        else:
+            holding_managers += 1
+
+    return _PortfolioValueTrendSummary(
+        report_quarter=report_quarter,
+        previous_quarter=previous_quarter,
+        selected_managers=len(selected_ciks),
+        analyzed_managers=analyzed_managers,
+        missing_current=missing_current,
+        missing_previous=missing_previous,
+        growing_managers=growing_managers,
+        holding_managers=holding_managers,
+        reducing_managers=reducing_managers,
+        previous_total_value_k=previous_total_value_k,
+        current_total_value_k=current_total_value_k,
+    )
+
+
+def _print_portfolio_value_trend_summary(
+    store: Any,
+    report_quarter: str,
+    *,
+    manager_ciks: list[str] | None,
+) -> None:
+    if not manager_ciks:
+        return
+    summary = _compute_portfolio_value_trend_summary(store, report_quarter, manager_ciks)
+    if summary is None:
+        return
+
+    print()
+    print("Hedge Funds Portfolio Value Trend (QoQ)")
+    print(f"Compared quarters: {summary.previous_quarter} -> {summary.report_quarter}")
+    print(
+        "Managers analyzed: "
+        f"{summary.analyzed_managers}/{summary.selected_managers}"
+        f" (missing current: {summary.missing_current}, missing previous: {summary.missing_previous})"
+    )
+
+    if summary.analyzed_managers == 0:
+        print("Not enough comparable snapshots to determine portfolio value direction.")
+        return
+
+    aggregate_change_ratio = _portfolio_value_change_ratio(
+        summary.previous_total_value_k,
+        summary.current_total_value_k,
+    )
+    aggregate_direction = _portfolio_value_direction(aggregate_change_ratio)
+    print(
+        "Aggregate portfolio value: "
+        f"{_format_value_k(summary.previous_total_value_k)} -> {_format_value_k(summary.current_total_value_k)} "
+        f"({_format_signed_ratio(aggregate_change_ratio)}; {aggregate_direction})"
+    )
+
+    def _share(count: int) -> float:
+        return count / summary.analyzed_managers
+
+    headers = ["Direction", "Managers", "Share"]
+    rows = [
+        ["Growing", str(summary.growing_managers), _format_ratio(_share(summary.growing_managers))],
+        ["Holding", str(summary.holding_managers), _format_ratio(_share(summary.holding_managers))],
+        ["Reducing", str(summary.reducing_managers), _format_ratio(_share(summary.reducing_managers))],
+    ]
+    print(_format_table(headers, rows))
+
+
 def _print_detailed_trend_table(
     store: Any,
     report_quarter: str,
@@ -168,6 +337,7 @@ def _print_detailed_trend_table(
     limit: int = IDEAS_OUTPUT_MAX_ROWS,
     show_reversals: bool = False,
     symbols_file: str = "config/cusip_tickers.json",
+    manager_ciks: list[str] | None = None,
 ) -> None:
     symbol_map = _load_symbol_map(Path(symbols_file))
     signals = store.list_trend_stock_signals(report_quarter)
@@ -237,6 +407,11 @@ def _print_detailed_trend_table(
 
     _print_section("Top Buy Trends", headers, [_row(item) for item in buy])
     _print_section("Top Sell Trends", headers, [_row(item) for item in sell])
+    _print_portfolio_value_trend_summary(
+        store,
+        report_quarter,
+        manager_ciks=manager_ciks,
+    )
     if show_reversals:
         _print_section("Reversals", headers, [_row(item) for item in reversals])
 
@@ -532,6 +707,7 @@ def _main(logger: logging.Logger) -> int:
             "clean_state": args.clean_state == "clean_state",
         },
     )
+    manager_ciks = [manager.cik for manager in config.managers]
 
     if args.test_notification:
         try:
@@ -566,6 +742,7 @@ def _main(logger: logging.Logger) -> int:
                 limit=args.trends_limit,
                 show_reversals=args.trends_show_reversals,
                 symbols_file=args.trends_symbols_file,
+                manager_ciks=manager_ciks,
             )
         runtime.store.close()
         logger.info(
@@ -713,6 +890,7 @@ def _main(logger: logging.Logger) -> int:
                 limit=args.trends_limit,
                 show_reversals=args.trends_show_reversals,
                 symbols_file=args.trends_symbols_file,
+                manager_ciks=manager_ciks,
             )
     elif _should_print_trend_table(
         dry_run=args.dry_run,
@@ -726,6 +904,7 @@ def _main(logger: logging.Logger) -> int:
             limit=args.trends_limit,
             show_reversals=args.trends_show_reversals,
             symbols_file=args.trends_symbols_file,
+            manager_ciks=manager_ciks,
         )
 
     notify_if_all_reports_published_for_current_quarter(
@@ -747,7 +926,7 @@ def _main(logger: logging.Logger) -> int:
         if not args.dry_run and available_pipeline_quarters < required_pipeline_quarters:
             auto_backfill_from_quarter = _auto_backfill_from_quarter(
                 store=runtime.store,
-                manager_ciks=[manager.cik for manager in config.managers],
+                manager_ciks=manager_ciks,
                 as_of_quarter=pipeline_quarter,
                 required_trend_quarters=required_pipeline_quarters,
             )
