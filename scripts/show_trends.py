@@ -4,9 +4,19 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+try:
+    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+except ModuleNotFoundError as exc:
+    if exc.name != "tracker":
+        raise
+    # Keep script execution stable in CI where the repository root may be absent from sys.path.
+    repo_root = Path(__file__).resolve().parents[1]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
