@@ -3,8 +3,13 @@ name: 13F Tracker
 on:
   workflow_dispatch:
     inputs:
-      force_trend_summary_resend:
-        description: "Force resend trend summary from DB to Telegram (manual runs only)"
+      force_full_rebuild_and_resend:
+        description: "Force full data rebuild and then force resend trend summary"
+        required: false
+        default: false
+        type: boolean
+      force_resend_only:
+        description: "Force resend trend summary from existing DB data only"
         required: false
         default: false
         type: boolean
@@ -100,8 +105,17 @@ jobs:
         run: |
           python -m pytest -q
 
+      - name: Validate manual force flags
+        if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event.inputs.force_full_rebuild_and_resend }}" = "true" ] && [ "${{ github.event.inputs.force_resend_only }}" = "true" ]; then
+            echo "Choose only one mode: force_full_rebuild_and_resend OR force_resend_only"
+            exit 1
+          fi
+
       - name: Run tracker
-        if: steps.schedule_gate.outputs.should_run == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.force_trend_summary_resend == 'true')
+        if: steps.schedule_gate.outputs.should_run == 'true' && !(github.event_name == 'workflow_dispatch' && (github.event.inputs.force_full_rebuild_and_resend == 'true' || github.event.inputs.force_resend_only == 'true'))
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
@@ -114,8 +128,23 @@ jobs:
           mkdir -p data
           python -m tracker
 
-      - name: Force resend trend summary (manual)
-        if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_trend_summary_resend == 'true'
+      - name: Force full rebuild and resend (manual)
+        if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_full_rebuild_and_resend == 'true'
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
+          MANAGERS_FILE: config/managers.json
+          DB_PATH: data/tracker.sqlite3
+          NOTIFIERS: ${{ vars.NOTIFIERS || 'telegram' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          mkdir -p data
+          python -m tracker --force-trend-recompute
+          python -m tracker --send-trend-summary-from-db --send-trend-summary-force
+
+      - name: Force resend trend summary only (manual)
+        if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_resend_only == 'true'
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
