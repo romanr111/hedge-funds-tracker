@@ -2,6 +2,12 @@ name: 13F Tracker
 
 on:
   workflow_dispatch:
+    inputs:
+      force_trend_summary_resend:
+        description: "Force resend trend summary from DB to Telegram (manual runs only)"
+        required: false
+        default: false
+        type: boolean
   schedule:
     # GitHub Actions schedule is UTC.
     # 04:00 UTC matches 07:00 Europe/Kyiv during DST (UTC+3).
@@ -95,7 +101,7 @@ jobs:
           python -m pytest -q
 
       - name: Run tracker
-        if: steps.schedule_gate.outputs.should_run == 'true'
+        if: steps.schedule_gate.outputs.should_run == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.force_trend_summary_resend == 'true')
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
@@ -107,6 +113,19 @@ jobs:
         run: |
           mkdir -p data
           python -m tracker
+
+      - name: Force resend trend summary (manual)
+        if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_trend_summary_resend == 'true'
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
+          MANAGERS_FILE: config/managers.json
+          DB_PATH: data/tracker.sqlite3
+          NOTIFIERS: ${{ vars.NOTIFIERS || 'telegram' }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python -m tracker --send-trend-summary-from-db --send-trend-summary-force
 
       - name: Commit state file if changed
         if: steps.schedule_gate.outputs.should_run == 'true'
