@@ -101,7 +101,7 @@ jobs:
           python -m pytest -q
 
       - name: Run tracker
-        if: steps.schedule_gate.outputs.should_run == 'true'
+        if: steps.schedule_gate.outputs.should_run == 'true' && !(github.event_name == 'workflow_dispatch' && github.event.inputs.force_trend_summary_resend == 'true')
         env:
           SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
           SEC_RATE_LIMIT_PER_SEC: ${{ vars.SEC_RATE_LIMIT_PER_SEC || '5' }}
