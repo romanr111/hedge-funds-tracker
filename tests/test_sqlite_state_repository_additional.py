@@ -363,8 +363,8 @@ def test_list_helpers_return_empty_when_no_input(tmp_path: Path) -> None:
         store.close()
 
 
-def test_quarterly_table_replacements_and_clear_state(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "quarterly.sqlite3")
+def test_trend_tables_and_clear_state(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "trend.sqlite3")
     try:
         assert store.get_latest_trend_quarter() is None
         assert store.get_latest_trend_run_quarter() is None
@@ -383,65 +383,6 @@ def test_quarterly_table_replacements_and_clear_state(tmp_path: Path) -> None:
         assert store.get_latest_trend_quarter() == "2025Q1"
         assert store.get_latest_trend_run_quarter() == "2025Q1"
 
-        run_id = "run-1"
-        store.upsert_quarterly_pipeline_run(
-            run_id=run_id,
-            as_of_quarter="2025Q1",
-            status="running",
-            config_json="{}",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            finished_at=None,
-            notes_json=None,
-        )
-        store.update_quarterly_pipeline_run_status(
-            run_id=run_id,
-            status="ok",
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            notes_json='{"status":"ok"}',
-        )
-        store.replace_quarterly_portfolio_positions(
-            run_id,
-            "2025Q1",
-            [
-                {
-                    "instrument_key": "AAA",
-                    "ticker": "AAA",
-                    "sector": "TECH",
-                    "country": "US",
-                    "score_raw": 1.0,
-                    "score_risk": 0.8,
-                    "target_weight": 0.6,
-                    "weight_capped": 0.5,
-                    "passed_filters": True,
-                    "filter_reasons": ["ok", 100],
-                }
-            ],
-        )
-        store.replace_quarterly_return_series(
-            run_id,
-            [
-                {
-                    "date": "2025-01-02",
-                    "strategy_gross_return": 0.02,
-                    "strategy_net_return": 0.019,
-                    "benchmark_return": 0.01,
-                    "turnover": 0.15,
-                }
-            ],
-        )
-        store.replace_quarterly_kpis(
-            run_id,
-            [
-                {
-                    "metric": "sharpe",
-                    "scope": "overall",
-                    "scope_key": None,
-                    "value": 1.5,
-                }
-            ],
-        )
-        rows = store.list_quarterly_kpi_rows(run_id)
-        assert rows == [{"metric": "sharpe", "scope": "overall", "scope_key": None, "value": 1.5}]
         assert store.clear_state() > 0
     finally:
         store.close()
@@ -455,21 +396,6 @@ def test_quarterly_table_replacements_and_clear_state(tmp_path: Path) -> None:
         lambda s: s.get_latest_trend_quarter(),
         lambda s: s.list_trend_quarters(),
         lambda s: s.has_trend_signals_for_quarter("2025Q1"),
-        lambda s: s.upsert_quarterly_pipeline_run(
-            run_id="run-1",
-            as_of_quarter="2025Q1",
-            status="running",
-            config_json="{}",
-            created_at=datetime.now(timezone.utc).isoformat(),
-            finished_at=None,
-            notes_json=None,
-        ),
-        lambda s: s.update_quarterly_pipeline_run_status(
-            run_id="run-1",
-            status="ok",
-            finished_at=datetime.now(timezone.utc).isoformat(),
-            notes_json=None,
-        ),
         lambda s: s.clear_state(),
     ],
 )
