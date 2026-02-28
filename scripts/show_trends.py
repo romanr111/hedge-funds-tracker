@@ -9,6 +9,13 @@ from typing import Any
 
 try:
     from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+    from tracker.domain.trend_presentation import (
+        action_for_signal,
+        conviction_target,
+        freshness_icon,
+        setup_for_regime,
+        target_confidence_for_regime,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "tracker":
         raise
@@ -17,6 +24,13 @@ except ModuleNotFoundError as exc:
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
     from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+    from tracker.domain.trend_presentation import (
+        action_for_signal,
+        conviction_target,
+        freshness_icon,
+        setup_for_regime,
+        target_confidence_for_regime,
+    )
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
@@ -82,59 +96,23 @@ def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> Non
 
 
 def _action_for_signal(signal: Any) -> str:
-    target = _target_confidence_for_signal(signal)
-    regime = (signal.regime or "").upper()
-    confidence = float(signal.confidence)
-    target_gap_pp = (target - confidence) * 100.0
-
-    if regime.startswith("STRONG_") and confidence >= target:
-        if regime.endswith("_BUY"):
-            return "BUY"
-        if regime.endswith("_SELL"):
-            return "SELL"
-    has_direction = regime.endswith("_BUY") or regime.endswith("_SELL")
-    if has_direction and target_gap_pp <= 5.0 + 1e-9:
-        return "INTERESTING_IDEA"
-    return "MONITOR"
+    return action_for_signal(str(signal.regime or ""), float(signal.confidence))
 
 
 def _setup_for_signal(signal: Any) -> str:
-    regime = (signal.regime or "").upper()
-    if regime.startswith("STRONG_"):
-        return "Strong"
-    if regime.startswith("REVERSAL_"):
-        return "Reversal"
-    if regime.startswith("EMERGING_"):
-        return "Emerging"
-    if regime.startswith("WEAKENING_"):
-        return "Weakening"
-    return "Unknown"
+    return setup_for_regime(str(signal.regime or ""))
 
 
 def _target_confidence_for_signal(signal: Any) -> float:
-    regime = (signal.regime or "").upper()
-    if regime.startswith("STRONG_"):
-        return 0.65
-    if regime in {"REVERSAL_SELL", "EMERGING_SELL"}:
-        return SELL_TABLE_MIN_CONF
-    if regime in {"REVERSAL_BUY", "EMERGING_BUY"}:
-        return 0.45
-    if regime.startswith("WEAKENING_"):
-        return 0.50
-    return 0.50
+    return target_confidence_for_regime(str(signal.regime or ""))
 
 
 def _conviction_target_for_signal(signal: Any) -> str:
-    confidence_pct = round(float(signal.confidence) * 100)
-    target_pct = round(_target_confidence_for_signal(signal) * 100)
-    return f"{confidence_pct}% (Target: {target_pct}%)"
+    return conviction_target(float(signal.confidence), str(signal.regime or ""))
 
 
 def _freshness_icon(signal: Any) -> str:
-    freshness_ok = getattr(signal, "freshness_ok", None)
-    if freshness_ok is None:
-        return "❌"
-    return "✅" if bool(freshness_ok) else "❌"
+    return freshness_icon(getattr(signal, "freshness_ok", None))
 
 
 def main() -> int:

@@ -186,7 +186,10 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
     assert "DDD" not in result.stdout  # trend 0.0009 < buy-table threshold 0.001
     assert " | cusip " not in result.stdout
     assert "Data Fresh" in result.stdout
-    assert "❌" in result.stdout
+    assert "❌" not in result.stdout
+    output_rows = _section_rows(result.stdout, "Top Buy Trends") + _section_rows(result.stdout, "Top Sell Trends")
+    assert output_rows
+    assert all(row.split("|")[-1].strip() == "-" for row in output_rows)
     assert "INTERESTING_IDEA" in result.stdout
     assert "SELL" in result.stdout
     assert "WATCH" not in result.stdout
