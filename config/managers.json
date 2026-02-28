@@ -58,5 +58,20 @@
     "name": "Christopher Davis - Davis Advisors",
     "cik": "0001036325",
     "weight": 1.0
+  },
+  {
+    "name": "Bill Nygren - Oakmark Select Fund",
+    "cik": "0000813917",
+    "weight": 0.5
+  },
+  {
+    "name": "Richard Pzena - Hancock Classic Value",
+    "cik": "0001027796",
+    "weight": 0.5
+  },
+  {
+    "name": "Li Lu - Himalaya Capital Management",
+    "cik": "0001709323",
+    "weight": 1.0
   }
 ]
