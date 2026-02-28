@@ -285,3 +285,23 @@ def test_analyze_portfolio_positions_trends_validates_inputs(tmp_path: Path) -> 
             )
     finally:
         store.close()
+
+
+def test_analyze_portfolio_positions_trends_supports_ticker_alias_separators(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_base_dataset(store)
+        result = analyze_portfolio_positions_trends(
+            store=store,
+            managers=_managers(),
+            tickers=["BRK.B", "BRK B", "BRK/B"],
+            symbol_map={"111111111": "BRK/B"},
+        )
+    finally:
+        store.close()
+
+    assert len(result.rows) == 1
+    row = result.rows[0]
+    assert row.ticker == "BRK.B"
+    assert row.status == "OK"
+    assert row.mapped_keys == ["111111111"]

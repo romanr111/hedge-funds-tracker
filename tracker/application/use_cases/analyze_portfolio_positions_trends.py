@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 from statistics import mean
 from typing import Any, Protocol, Sequence
 
@@ -69,20 +70,29 @@ class _WeightEntry:
     shares: int
 
 
+def _ticker_lookup_key(raw_ticker: str) -> str:
+    ticker = raw_ticker.strip().upper()
+    parts = [part for part in re.split(r"[./\s]+", ticker) if part]
+    if len(parts) >= 2:
+        return "/".join(parts)
+    return ticker
+
+
 def _normalize_tickers(tickers: Sequence[str]) -> list[str]:
     if not isinstance(tickers, Sequence):
         raise ValueError("tickers must be a sequence of strings")
     normalized: list[str] = []
-    seen: set[str] = set()
+    seen_lookup_keys: set[str] = set()
     for raw in tickers:
         if not isinstance(raw, str):
             raise ValueError("tickers must contain only strings")
         ticker = raw.strip().upper()
         if not ticker:
             continue
-        if ticker in seen:
+        lookup_key = _ticker_lookup_key(ticker)
+        if lookup_key in seen_lookup_keys:
             continue
-        seen.add(ticker)
+        seen_lookup_keys.add(lookup_key)
         normalized.append(ticker)
     if not normalized:
         raise ValueError("tickers list must contain at least one non-empty ticker")
@@ -95,7 +105,7 @@ def _build_ticker_to_keys(symbol_map: dict[str, str]) -> dict[str, list[str]]:
         if not isinstance(raw_key, str) or not isinstance(raw_ticker, str):
             continue
         key = raw_key.strip().upper()
-        ticker = raw_ticker.strip().upper()
+        ticker = _ticker_lookup_key(raw_ticker)
         if not key or not ticker:
             continue
         by_ticker.setdefault(ticker, set()).add(key)
@@ -291,7 +301,7 @@ def analyze_portfolio_positions_trends(
     rows: list[PortfolioTickerTrendRow] = []
 
     for ticker in normalized_tickers:
-        mapped_keys = ticker_to_keys.get(ticker, [])
+        mapped_keys = ticker_to_keys.get(_ticker_lookup_key(ticker), [])
         if not mapped_keys:
             rows.append(
                 PortfolioTickerTrendRow(
