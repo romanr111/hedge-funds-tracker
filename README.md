@@ -142,8 +142,29 @@ By default the script tries to load live prices from `stooq` for tickers from yo
 
 Output JSON structure:
 - `report_quarter`, `previous_quarter`, `status`, `rows[]`
-- each row: `ticker`, `status`, `mapped_keys[]`, `trend{score,delta,confidence,regime}`, `fund_behavior{buy,sell,hold,analyzed,total,dominant}`, `note`
+- each row: `ticker`, `status`, `mapped_keys[]`, `trend{score,delta,confidence,regime}`,
+  `fund_behavior{buy,sell,hold,analyzed,total,dominant}`,
+  `presentation{action,setup,conviction_target,consensus_buy,consensus_sell,data_fresh}`, `note`
 - for `NO_DATA` rows, trend fields are `null`
+
+Sample data analysis snapshot (captured on February 28, 2026 from local `data/tracker.sqlite3`):
+```json
+["AMZN", "META", "MSFT", "NKE", "PM", "CMG", "VOO", "COP", "VRNA"]
+```
+
+```bash
+python3 scripts/analyze_portfolio_positions_trends.py \
+  --positions-file /tmp/positions_sample.json \
+  --db data/tracker.sqlite3 \
+  --symbols-file config/cusip_tickers.json \
+  --managers-file config/managers.json
+```
+
+Observed result on `2025Q4` (sample tickers: `AMZN,META,MSFT,NKE,PM,CMG,VOO,COP,VRNA`):
+- Total tickers: `9`
+- `OK`: `7`, `NO_DATA`: `2` (`VOO`, `COP` are unmapped in symbols file)
+- Action mix for `OK`: `SELL=1`, `IDEA_BUY=2`, `IDEA_SELL=3`, `MONITOR_BUY=1`
+- Freshness mix for `OK`: `✅=4`, `❌=2`, `-=1`
 
 Flag reference:
 - `--help`
