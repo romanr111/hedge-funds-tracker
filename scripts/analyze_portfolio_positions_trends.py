@@ -30,6 +30,12 @@ except ModuleNotFoundError as exc:
     from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 
+CHINA_ADR_TICKER_MAP: dict[str, str] = {
+    "9988": "BABA",
+    "BRK B": "BRK.B",
+}
+
+
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     widths = [len(header) for header in headers]
     for row in rows:
@@ -45,6 +51,74 @@ def _format_table(headers: list[str], rows: list[list[str]]) -> str:
     return "\n".join(output)
 
 
+def _normalize_ticker(raw: str) -> str:
+    ticker = raw.strip().upper()
+    return CHINA_ADR_TICKER_MAP.get(ticker, ticker)
+
+
+def _normalize_tickers(items: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw in items:
+        ticker = _normalize_ticker(raw)
+        if not ticker or ticker in seen:
+            continue
+        seen.add(ticker)
+        normalized.append(ticker)
+    return normalized
+
+
+def _looks_like_ticker_key(raw_key: str) -> bool:
+    key = raw_key.strip().upper()
+    if not key:
+        return False
+    if "TOTAL" in key or "VALUE" in key:
+        return False
+    if all(ch.isdigit() for ch in key):
+        return len(key) in {4, 5, 6}
+    return any(ch.isalpha() for ch in key)
+
+
+def _extract_tickers_from_stocks_value(value: Any) -> list[str]:
+    if isinstance(value, dict):
+        extracted: list[str] = []
+        for key, nested in value.items():
+            if isinstance(key, str) and isinstance(nested, (int, float)) and _looks_like_ticker_key(key):
+                extracted.append(key)
+            extracted.extend(_extract_tickers_from_stocks_value(nested))
+        return extracted
+    if isinstance(value, list):
+        extracted: list[str] = []
+        for item in value:
+            if isinstance(item, str) and _looks_like_ticker_key(item):
+                extracted.append(item)
+            extracted.extend(_extract_tickers_from_stocks_value(item))
+        return extracted
+    return []
+
+
+def _extract_tickers_from_stocks_sections(payload: Any) -> list[str]:
+    extracted: list[str] = []
+    found_stocks_key = False
+
+    def _walk(node: Any) -> None:
+        nonlocal found_stocks_key
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if isinstance(key, str) and "stocks" in key.lower():
+                    found_stocks_key = True
+                    extracted.extend(_extract_tickers_from_stocks_value(value))
+                _walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                _walk(item)
+
+    _walk(payload)
+    if not found_stocks_key:
+        return []
+    return extracted
+
+
 def _load_positions_file(path: Path) -> list[str]:
     if not path.exists():
         raise ValueError(f"Positions file not found: {path}")
@@ -52,11 +126,21 @@ def _load_positions_file(path: Path) -> list[str]:
         payload = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Invalid positions JSON file: {path}") from exc
-    if not isinstance(payload, list):
-        raise ValueError("Positions file must be a JSON array of tickers")
-    if any(not isinstance(item, str) for item in payload):
-        raise ValueError("Positions file must contain only string tickers")
-    return payload
+    if isinstance(payload, list):
+        if any(not isinstance(item, str) for item in payload):
+            raise ValueError("Positions file must contain only string tickers")
+        tickers = _normalize_tickers(payload)
+        if not tickers:
+            raise ValueError("Positions file must contain at least one non-empty ticker")
+        return tickers
+
+    tickers = _normalize_tickers(_extract_tickers_from_stocks_sections(payload))
+    if tickers:
+        return tickers
+    raise ValueError(
+        "Positions file must be either a JSON array of string tickers "
+        "or an object containing at least one key with 'Stocks' and ticker values"
+    )
 
 
 def _format_float(value: float | None, digits: int) -> str:
@@ -103,9 +187,16 @@ def _write_output_json(path: Path, payload: dict[str, object]) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Analyze trend behavior for a portfolio JSON tickers list using existing DB snapshots."
+        description="Analyze trend behavior for portfolio positions JSON using existing DB snapshots."
     )
-    parser.add_argument("--positions-file", required=True, help="JSON file with tickers list, for example: [\"AAPL\",\"MSFT\"]")
+    parser.add_argument(
+        "--positions-file",
+        required=True,
+        help=(
+            "JSON file with either a tickers list "
+            "(example: [\"AAPL\",\"MSFT\"]) or a nested object with keys containing 'Stocks'"
+        ),
+    )
     parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB (default: data/tracker.sqlite3)")
     parser.add_argument("--symbols-file", default="config/cusip_tickers.json", help="CUSIP/instrument_key to ticker mapping JSON")
     parser.add_argument("--quarter", help="Optional target quarter in format YYYYQn")

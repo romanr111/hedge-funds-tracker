@@ -200,7 +200,7 @@ def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> No
         str(managers_path),
     )
     assert invalid_json_result.returncode == 1
-    assert "JSON array" in invalid_json_result.stdout
+    assert "JSON array of string tickers" in invalid_json_result.stdout
 
     good_positions = tmp_path / "positions.json"
     good_positions.write_text(json.dumps(["AAA"], ensure_ascii=True))
@@ -218,6 +218,83 @@ def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> No
     )
     assert invalid_quarter_result.returncode == 1
     assert "YYYYQn" in invalid_quarter_result.stdout
+
+
+def test_script_extracts_stocks_from_nested_json_and_maps_china_tickers(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    _seed_db(db_path)
+
+    positions_path = tmp_path / "positions.json"
+    positions_path.write_text(
+        json.dumps(
+            {
+                "IB_DATA": {
+                    "China Stocks": {
+                        "9988": 9120,
+                        "KWEB": 4976,
+                    },
+                    "Stocks": {
+                        "AAA": 200,
+                        "GM": 100,
+                        "BRK B": 50,
+                    },
+                    "Total Stocks Value": 14296,
+                }
+            },
+            ensure_ascii=True,
+        )
+    )
+
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text(
+        json.dumps(
+            {
+                "111111111": "AAA",
+                "333333333": "GM",
+                "333333334": "GM",
+            },
+            ensure_ascii=True,
+        )
+    )
+
+    managers_path = tmp_path / "managers.json"
+    managers_path.write_text(
+        json.dumps(
+            [
+                {"name": "Fund A", "cik": "0000000001", "weight": 1.0},
+                {"name": "Fund B", "cik": "0000000002", "weight": 1.0},
+                {"name": "Fund C", "cik": "0000000003", "weight": 1.0},
+            ],
+            ensure_ascii=True,
+        )
+    )
+
+    output_json = tmp_path / "analysis" / "result.json"
+    result = _run_script(
+        "--positions-file",
+        str(positions_path),
+        "--db",
+        str(db_path),
+        "--symbols-file",
+        str(symbols_path),
+        "--managers-file",
+        str(managers_path),
+        "--output-json",
+        str(output_json),
+    )
+
+    assert result.returncode == 0
+    assert output_json.exists()
+
+    payload = json.loads(output_json.read_text())
+    tickers = [item["ticker"] for item in payload["rows"]]
+    assert "9988" not in tickers
+    assert "BABA" in tickers
+    assert "KWEB" in tickers
+    assert "AAA" in tickers
+    assert "GM" in tickers
+    assert "BRK B" not in tickers
+    assert "BRK.B" in tickers
 
 
 def test_script_returns_error_when_db_missing(tmp_path: Path) -> None:
