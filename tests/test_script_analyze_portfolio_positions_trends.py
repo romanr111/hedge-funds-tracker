@@ -5,6 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import scripts.analyze_portfolio_positions_trends as portfolio_script
 from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 
@@ -147,6 +148,7 @@ def test_script_runs_and_writes_output_json(tmp_path: Path) -> None:
         str(symbols_path),
         "--managers-file",
         str(managers_path),
+        "--skip-live-prices",
         "--output-json",
         str(output_json),
     )
@@ -154,10 +156,27 @@ def test_script_runs_and_writes_output_json(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "Report quarter: 2025Q4" in result.stdout
     assert "Ticker" in result.stdout
+    assert "Action" in result.stdout
+    assert "Setup (Regime)" in result.stdout
+    assert "Conviction / Target" in result.stdout
+    assert "Consensus (+/-)" in result.stdout
+    assert "Data Fresh" in result.stdout
     assert "NO_DATA" in result.stdout
     assert "AAA" in result.stdout
     assert "GM" in result.stdout
+    assert "INTERESTING_IDEA" not in result.stdout
+    assert "MONITOR          |" not in result.stdout
+    assert ("IDEA_" in result.stdout) or ("MONITOR_" in result.stdout)
+    assert "Mapped Keys" not in result.stdout
+    assert "Buy/Sell/Hold" not in result.stdout
     assert output_json.exists()
+
+    lines = result.stdout.splitlines()
+    header_idx = next(idx for idx, line in enumerate(lines) if "Ticker" in line and "Action" in line)
+    table_rows = [line for line in lines[header_idx + 2 :] if line.strip()]
+    assert any("NO_DATA" in line for line in table_rows)
+    first_no_data_idx = next(idx for idx, line in enumerate(table_rows) if "NO_DATA" in line)
+    assert first_no_data_idx > 0
 
     payload = json.loads(output_json.read_text())
     assert payload["report_quarter"] == "2025Q4"
@@ -165,6 +184,18 @@ def test_script_runs_and_writes_output_json(tmp_path: Path) -> None:
     assert payload["status"] == "OK"
     assert isinstance(payload["rows"], list)
     assert any(item["ticker"] == "BBB" and item["status"] == "NO_DATA" for item in payload["rows"])
+    assert all("presentation" in item for item in payload["rows"])
+    ok_row = next(item for item in payload["rows"] if item["status"] == "OK")
+    assert ok_row["presentation"]["action"] in {
+        "BUY",
+        "SELL",
+        "IDEA_BUY",
+        "IDEA_SELL",
+        "IDEA_NEUTRAL",
+        "MONITOR_BUY",
+        "MONITOR_SELL",
+        "MONITOR_NEUTRAL",
+    }
 
 
 def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> None:
@@ -198,6 +229,7 @@ def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> No
         str(symbols_path),
         "--managers-file",
         str(managers_path),
+        "--skip-live-prices",
     )
     assert invalid_json_result.returncode == 1
     assert "JSON array of string tickers" in invalid_json_result.stdout
@@ -213,6 +245,7 @@ def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> No
         str(symbols_path),
         "--managers-file",
         str(managers_path),
+        "--skip-live-prices",
         "--quarter",
         "2025-4",
     )
@@ -279,6 +312,7 @@ def test_script_extracts_stocks_from_nested_json_and_maps_china_tickers(tmp_path
         str(symbols_path),
         "--managers-file",
         str(managers_path),
+        "--skip-live-prices",
         "--output-json",
         str(output_json),
     )
@@ -310,3 +344,29 @@ def test_script_returns_error_when_db_missing(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "Database not found" in result.stdout
+
+
+def test_load_live_latest_prices_limits_requested_tickers(monkeypatch) -> None:
+    captured_tickers: list[str] = []
+
+    class _GatewayStub:
+        def get_latest_prices(self, tickers: list[str]) -> dict[str, float]:
+            captured_tickers.extend(tickers)
+            return {"AAA": 100.0, "BRK/B": 200.0, "ZZZ": 300.0}
+
+    monkeypatch.setattr(portfolio_script, "StooqPriceGateway", lambda: _GatewayStub())
+
+    latest_prices = portfolio_script._load_live_latest_prices(
+        symbol_map={
+            "111111111": "AAA",
+            "084670702": "BRK/B",
+            "999999999": "ZZZ",
+        },
+        tickers=["AAA", "BRK.B"],
+    )
+
+    assert set(captured_tickers) == {"AAA", "BRK/B"}
+    assert latest_prices == {
+        "111111111": 100.0,
+        "084670702": 200.0,
+    }

@@ -8,6 +8,11 @@ from typing import Any, Protocol, Sequence
 from tracker.application.use_cases.run_trend_engine import WINDOW_QUARTERS
 from tracker.domain.models import ManagerQuarterSnapshot
 from tracker.domain.quarters import parse_report_quarter, quarter_sort_key
+from tracker.domain.trend_presentation import (
+    action_for_signal,
+    conviction_target,
+    setup_for_regime,
+)
 from tracker.domain.trends import (
     _trade_flow_delta,
     compute_trend_signals,
@@ -39,12 +44,23 @@ class PortfolioTickerFundBehavior:
 
 
 @dataclass(frozen=True)
+class PortfolioTickerPresentation:
+    action: str
+    setup: str
+    conviction_target: str
+    consensus_buy: int
+    consensus_sell: int
+    data_fresh: bool | None
+
+
+@dataclass(frozen=True)
 class PortfolioTickerTrendRow:
     ticker: str
     status: str
     mapped_keys: list[str]
     trend: PortfolioTickerTrend
     fund_behavior: PortfolioTickerFundBehavior
+    presentation: PortfolioTickerPresentation
     note: str | None
 
 
@@ -229,6 +245,114 @@ def _aggregate_ticker_trend(signals: list[Any]) -> PortfolioTickerTrend:
     return PortfolioTickerTrend(score=score, delta=delta, confidence=confidence, regime=str(regime_source.regime))
 
 
+def _aggregate_consensus_from_signals(signals: list[Any]) -> tuple[int, int]:
+    manager_net_signal: dict[str, float] = {}
+    has_contributors = False
+
+    for signal in signals:
+        contributors = getattr(signal, "contributors", None)
+        if not isinstance(contributors, list):
+            continue
+        for contributor in contributors:
+            if not isinstance(contributor, dict):
+                continue
+            manager_cik = contributor.get("manager_cik")
+            signal_value = contributor.get("signal_value")
+            if not isinstance(manager_cik, str):
+                continue
+            if not isinstance(signal_value, (int, float)):
+                continue
+            has_contributors = True
+            manager_net_signal[manager_cik] = manager_net_signal.get(manager_cik, 0.0) + float(signal_value)
+
+    if has_contributors:
+        buy = sum(1 for value in manager_net_signal.values() if value > 0)
+        sell = sum(1 for value in manager_net_signal.values() if value < 0)
+        return (buy, sell)
+
+    buy = sum(int(getattr(signal, "buy_managers", 0)) for signal in signals)
+    sell = sum(int(getattr(signal, "sell_managers", 0)) for signal in signals)
+    return (buy, sell)
+
+
+def _aggregate_data_fresh(signals: list[Any]) -> bool | None:
+    freshness_values = [getattr(signal, "freshness_ok", None) for signal in signals]
+    if any(value is False for value in freshness_values):
+        return False
+    if any(value is True for value in freshness_values):
+        return True
+    return None
+
+
+def _build_presentation(
+    *,
+    status: str,
+    trend: PortfolioTickerTrend,
+    signals: list[Any],
+) -> PortfolioTickerPresentation:
+    if status != "OK" or trend.regime is None or trend.confidence is None:
+        return PortfolioTickerPresentation(
+            action="NO_DATA",
+            setup="-",
+            conviction_target="-",
+            consensus_buy=0,
+            consensus_sell=0,
+            data_fresh=None,
+        )
+
+    consensus_buy, consensus_sell = _aggregate_consensus_from_signals(signals)
+    base_action = action_for_signal(trend.regime, trend.confidence)
+    direction = _direction_from_regime_or_trend(trend.regime, trend.score)
+    return PortfolioTickerPresentation(
+        action=_directional_action(base_action, direction),
+        setup=setup_for_regime(trend.regime),
+        conviction_target=conviction_target(trend.confidence, trend.regime),
+        consensus_buy=consensus_buy,
+        consensus_sell=consensus_sell,
+        data_fresh=_aggregate_data_fresh(signals),
+    )
+
+
+def _direction_from_regime_or_trend(regime: str | None, trend_score: float | None) -> str:
+    normalized_regime = (regime or "").strip().upper()
+    if normalized_regime.endswith("_BUY"):
+        return "BUY"
+    if normalized_regime.endswith("_SELL"):
+        return "SELL"
+    if trend_score is None:
+        return "NEUTRAL"
+    if trend_score > 1e-12:
+        return "BUY"
+    if trend_score < -1e-12:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def _directional_action(action: str, direction: str) -> str:
+    if action in {"BUY", "SELL"}:
+        return action
+    if action == "INTERESTING_IDEA":
+        if direction == "BUY":
+            return "IDEA_BUY"
+        if direction == "SELL":
+            return "IDEA_SELL"
+        return "IDEA_NEUTRAL"
+    if action == "MONITOR":
+        if direction == "BUY":
+            return "MONITOR_BUY"
+        if direction == "SELL":
+            return "MONITOR_SELL"
+        return "MONITOR_NEUTRAL"
+    return action
+
+
+def _note_for_ok_row(regime: str | None) -> str | None:
+    normalized_regime = (regime or "").strip().upper()
+    if normalized_regime == "NONE":
+        return "Low confidence for regime"
+    return None
+
+
 def _resolve_target_quarter(common_quarters: list[str], target_quarter: str | None) -> str:
     if target_quarter is None:
         return common_quarters[-1]
@@ -248,6 +372,7 @@ def analyze_portfolio_positions_trends(
     symbol_map: dict[str, str],
     target_quarter: str | None = None,
     blend_mode: str = "tactical",
+    latest_prices: dict[str, float] | None = None,
 ) -> PortfolioPositionsTrendResult:
     normalized_tickers = _normalize_tickers(tickers)
 
@@ -282,6 +407,8 @@ def analyze_portfolio_positions_trends(
         snapshots_by_quarter=snapshots_by_quarter,
         manager_weights=manager_weights,
         blend_mode=blend_mode,
+        contributor_limit=max(5, len(active_managers)),
+        latest_prices=latest_prices,
     )
     signals_by_key = {signal.instrument_key: signal for signal in computed.signals}
 
@@ -317,6 +444,11 @@ def analyze_portfolio_positions_trends(
                         total=len(manager_ciks),
                         dominant=None,
                     ),
+                    presentation=_build_presentation(
+                        status="NO_DATA",
+                        trend=PortfolioTickerTrend(score=None, delta=None, confidence=None, regime=None),
+                        signals=[],
+                    ),
                     note="Ticker is not mapped in symbols file",
                 )
             )
@@ -338,6 +470,11 @@ def analyze_portfolio_positions_trends(
                     mapped_keys=mapped_keys,
                     trend=PortfolioTickerTrend(score=None, delta=None, confidence=None, regime=None),
                     fund_behavior=behavior,
+                    presentation=_build_presentation(
+                        status="NO_DATA",
+                        trend=PortfolioTickerTrend(score=None, delta=None, confidence=None, regime=None),
+                        signals=[],
+                    ),
                     note="No manager positions found for selected quarter comparison",
                 )
             )
@@ -351,19 +488,26 @@ def analyze_portfolio_positions_trends(
                     mapped_keys=mapped_keys,
                     trend=PortfolioTickerTrend(score=None, delta=None, confidence=None, regime=None),
                     fund_behavior=behavior,
+                    presentation=_build_presentation(
+                        status="NO_DATA",
+                        trend=PortfolioTickerTrend(score=None, delta=None, confidence=None, regime=None),
+                        signals=[],
+                    ),
                     note="No trend signals computed for mapped keys in selected quarter",
                 )
             )
             continue
 
+        trend = _aggregate_ticker_trend(matched_signals)
         rows.append(
             PortfolioTickerTrendRow(
                 ticker=ticker,
                 status="OK",
                 mapped_keys=mapped_keys,
-                trend=_aggregate_ticker_trend(matched_signals),
+                trend=trend,
                 fund_behavior=behavior,
-                note=None,
+                presentation=_build_presentation(status="OK", trend=trend, signals=matched_signals),
+                note=_note_for_ok_row(trend.regime),
             )
         )
 

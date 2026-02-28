@@ -141,6 +141,20 @@ def test_analyze_portfolio_positions_trends_happy_path_and_no_data(tmp_path: Pat
     aaa = rows["AAA"]
     assert aaa.status == "OK"
     assert aaa.trend.score is not None
+    assert aaa.presentation.action in {
+        "BUY",
+        "SELL",
+        "IDEA_BUY",
+        "IDEA_SELL",
+        "IDEA_NEUTRAL",
+        "MONITOR_BUY",
+        "MONITOR_SELL",
+        "MONITOR_NEUTRAL",
+    }
+    assert aaa.presentation.setup in {"Strong", "Reversal", "Emerging", "Weakening", "Unknown"}
+    assert "Target:" in aaa.presentation.conviction_target
+    assert aaa.presentation.consensus_buy >= 0
+    assert aaa.presentation.consensus_sell >= 0
     assert aaa.fund_behavior.total == 3
     assert aaa.fund_behavior.analyzed == 2
     assert aaa.fund_behavior.buy + aaa.fund_behavior.sell + aaa.fund_behavior.hold == 2
@@ -153,11 +167,14 @@ def test_analyze_portfolio_positions_trends_happy_path_and_no_data(tmp_path: Pat
 
     unknown = rows["UNKNOWN"]
     assert unknown.status == "NO_DATA"
+    assert unknown.presentation.action == "NO_DATA"
+    assert unknown.presentation.conviction_target == "-"
     assert "not mapped" in (unknown.note or "").lower()
 
     bbb = rows["BBB"]
     assert bbb.status == "NO_DATA"
     assert bbb.trend.score is None
+    assert bbb.presentation.action == "NO_DATA"
     assert bbb.fund_behavior.analyzed == 0
     assert "no manager positions" in (bbb.note or "").lower()
 
@@ -199,6 +216,57 @@ def test_analyze_portfolio_positions_trends_aggregates_multi_cusip_signals(tmp_p
     assert gm.trend.score == pytest.approx(expected_score)
     assert gm.trend.delta == pytest.approx(expected_delta)
     assert gm.trend.regime == expected_regime
+
+    manager_signal_by_key: dict[str, dict[str, float]] = {}
+    for key in ("333333333", "333333334"):
+        manager_signal_by_key[key] = {}
+        for contributor in by_key[key].contributors:
+            manager_cik = contributor.get("manager_cik")
+            signal_value = contributor.get("signal_value")
+            if isinstance(manager_cik, str) and isinstance(signal_value, (int, float)):
+                manager_signal_by_key[key][manager_cik] = float(signal_value)
+
+    manager_total_signal: dict[str, float] = {}
+    for key_contrib in manager_signal_by_key.values():
+        for manager_cik, signal_value in key_contrib.items():
+            manager_total_signal[manager_cik] = manager_total_signal.get(manager_cik, 0.0) + signal_value
+    expected_buy = sum(1 for value in manager_total_signal.values() if value > 0)
+    expected_sell = sum(1 for value in manager_total_signal.values() if value < 0)
+    assert gm.presentation.consensus_buy == expected_buy
+    assert gm.presentation.consensus_sell == expected_sell
+
+
+def test_analyze_portfolio_positions_trends_single_key_consensus_matches_signal_counts(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_base_dataset(store)
+        managers = _managers()
+        manager_ciks = [item.cik for item in managers]
+        snapshots = store.list_snapshots_for_quarters(["2025Q3", "2025Q4"], manager_ciks)
+        snapshots_by_quarter: dict[str, dict[str, object]] = {}
+        for snapshot in snapshots:
+            snapshots_by_quarter.setdefault(snapshot.report_quarter, {})[snapshot.cik] = snapshot
+
+        expected = compute_trend_signals(
+            quarters=["2025Q3", "2025Q4"],
+            snapshots_by_quarter=snapshots_by_quarter,
+            manager_weights={item.cik: item.weight for item in managers},
+            contributor_limit=len(managers),
+        )
+        by_key = {item.instrument_key: item for item in expected.signals}
+        result = analyze_portfolio_positions_trends(
+            store=store,
+            managers=managers,
+            tickers=["AAA"],
+            symbol_map=_symbol_map(),
+        )
+    finally:
+        store.close()
+
+    aaa = result.rows[0]
+    reference = by_key["111111111"]
+    assert aaa.presentation.consensus_buy == reference.buy_managers
+    assert aaa.presentation.consensus_sell == reference.sell_managers
 
 
 def test_no_position_managers_are_excluded_from_behavior_counts(tmp_path: Path) -> None:
@@ -305,3 +373,73 @@ def test_analyze_portfolio_positions_trends_supports_ticker_alias_separators(tmp
     assert row.ticker == "BRK.B"
     assert row.status == "OK"
     assert row.mapped_keys == ["111111111"]
+    assert row.presentation.action in {
+        "BUY",
+        "SELL",
+        "IDEA_BUY",
+        "IDEA_SELL",
+        "IDEA_NEUTRAL",
+        "MONITOR_BUY",
+        "MONITOR_SELL",
+        "MONITOR_NEUTRAL",
+    }
+
+
+def test_analyze_portfolio_positions_trends_uses_latest_prices_for_data_fresh(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_base_dataset(store)
+        managers = _managers()
+        fresh = analyze_portfolio_positions_trends(
+            store=store,
+            managers=managers,
+            tickers=["AAA"],
+            symbol_map=_symbol_map(),
+            latest_prices={"111111111": 1.0},
+        )
+        stale = analyze_portfolio_positions_trends(
+            store=store,
+            managers=managers,
+            tickers=["AAA"],
+            symbol_map=_symbol_map(),
+            latest_prices={"111111111": 5.0},
+        )
+    finally:
+        store.close()
+
+    assert fresh.rows[0].presentation.data_fresh is True
+    assert stale.rows[0].presentation.data_fresh is False
+
+
+def test_analyze_portfolio_positions_trends_sets_note_for_none_regime(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-2025Q3",
+            positions=[_pos("111111111", 1000)],
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-2025Q4",
+            positions=[_pos("111111111", 1000)],
+        )
+        result = analyze_portfolio_positions_trends(
+            store=store,
+            managers=[ManagerConfig(name="Fund A", cik="0000000001", weight=1.0)],
+            tickers=["AAA"],
+            symbol_map={"111111111": "AAA"},
+        )
+    finally:
+        store.close()
+
+    row = result.rows[0]
+    assert row.status == "OK"
+    assert row.trend.regime == "NONE"
+    assert row.note == "Low confidence for regime"

@@ -2,6 +2,7 @@ from .backfill_trend_history import run_backfill_trend_history
 from .analyze_portfolio_positions_trends import (
     PortfolioPositionsTrendResult,
     PortfolioTickerFundBehavior,
+    PortfolioTickerPresentation,
     PortfolioTickerTrend,
     PortfolioTickerTrendRow,
     analyze_portfolio_positions_trends,
@@ -29,6 +30,7 @@ __all__ = [
     "QUARTERLY_COMPLETION_STATE_NAME",
     "PortfolioPositionsTrendResult",
     "PortfolioTickerFundBehavior",
+    "PortfolioTickerPresentation",
     "PortfolioTickerTrend",
     "PortfolioTickerTrendRow",
     "TREND_ANALYSIS_SUMMARY_STATE_CIK",

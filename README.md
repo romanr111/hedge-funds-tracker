@@ -135,6 +135,10 @@ Arguments:
 - `--quarter` (optional): target quarter in `YYYYQn`; default is latest common quarter for configured managers.
 - `--output-json` (optional): write full structured output to JSON file.
 - `--managers-file` (optional): managers config path, default `config/managers.json`.
+- `--skip-live-prices` (optional): disable live `stooq` quote lookup for `Data Fresh`.
+
+By default the script tries to load live prices from `stooq` for tickers from your input file and uses them to calculate
+`Data Fresh` (`✅` fresh, `❌` stale, `-` unknown).
 
 Output JSON structure:
 - `report_quarter`, `previous_quarter`, `status`, `rows[]`
