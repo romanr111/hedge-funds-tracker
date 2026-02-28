@@ -108,6 +108,39 @@ python -m tracker --backfill-trend-history --backfill-from-quarter 2023Q1 --back
 python -m tracker --backfill-trend-history --backfill-force --backfill-include-latest
 ```
 
+### Portfolio Positions Trend Analyzer (MVP)
+Separate DB-only module for analyzing trends by a direct portfolio tickers list.
+This mode does not run SEC sync and does not modify current `python -m tracker` flow.
+
+Input JSON format (`--positions-file`):
+```json
+["AAPL", "MSFT", "GOOGL"]
+```
+
+Command examples:
+```bash
+python scripts/analyze_portfolio_positions_trends.py \
+  --positions-file data/positions.json
+
+python scripts/analyze_portfolio_positions_trends.py \
+  --positions-file data/positions.json \
+  --quarter 2025Q4 \
+  --output-json data/portfolio_trends_2025Q4.json
+```
+
+Arguments:
+- `--positions-file` (required): JSON array of tickers.
+- `--db` (optional): SQLite DB path, default `data/tracker.sqlite3`.
+- `--symbols-file` (optional): key-to-ticker map JSON, default `config/cusip_tickers.json`.
+- `--quarter` (optional): target quarter in `YYYYQn`; default is latest common quarter for configured managers.
+- `--output-json` (optional): write full structured output to JSON file.
+- `--managers-file` (optional): managers config path, default `config/managers.json`.
+
+Output JSON structure:
+- `report_quarter`, `previous_quarter`, `status`, `rows[]`
+- each row: `ticker`, `status`, `mapped_keys[]`, `trend{score,delta,confidence,regime}`, `fund_behavior{buy,sell,hold,analyzed,total,dominant}`, `note`
+- for `NO_DATA` rows, trend fields are `null`
+
 Flag reference:
 - `--help`
   Prints CLI help and exits without running SEC checks.
