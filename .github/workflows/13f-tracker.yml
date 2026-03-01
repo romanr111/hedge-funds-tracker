@@ -70,11 +70,30 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Initialize CI diagnostics
+        if: steps.schedule_gate.outputs.should_run == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p ci_artifacts
+          {
+            echo "workflow=${{ github.workflow }}"
+            echo "run_id=${{ github.run_id }}"
+            echo "run_number=${{ github.run_number }}"
+            echo "attempt=${{ github.run_attempt }}"
+            echo "event=${{ github.event_name }}"
+            echo "ref=${{ github.ref }}"
+            echo "sha=${{ github.sha }}"
+            echo "started_utc=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+          } > ci_artifacts/run_context.txt
+
       - name: Install dependencies
         if: steps.schedule_gate.outputs.should_run == 'true'
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          set -euo pipefail
+          {
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+          } 2>&1 | tee ci_artifacts/install_dependencies.log
 
       - name: Validate required configuration
         if: steps.schedule_gate.outputs.should_run == 'true'
@@ -85,34 +104,39 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           set -euo pipefail
-          if [ -z "$SEC_USER_AGENT" ]; then
-            echo "Missing required secret: SEC_USER_AGENT"
-            exit 1
-          fi
-          if [[ ",$NOTIFIERS," == *,telegram,* ]]; then
-            if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
-              echo "Missing required secret for telegram notifier: TELEGRAM_BOT_TOKEN"
+          {
+            if [ -z "$SEC_USER_AGENT" ]; then
+              echo "Missing required secret: SEC_USER_AGENT"
               exit 1
             fi
-            if [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
-              echo "Missing required secret for telegram notifier: TELEGRAM_CHAT_ID"
-              exit 1
+            if [[ ",$NOTIFIERS," == *,telegram,* ]]; then
+              if [ -z "${TELEGRAM_BOT_TOKEN:-}" ]; then
+                echo "Missing required secret for telegram notifier: TELEGRAM_BOT_TOKEN"
+                exit 1
+              fi
+              if [ -z "${TELEGRAM_CHAT_ID:-}" ]; then
+                echo "Missing required secret for telegram notifier: TELEGRAM_CHAT_ID"
+                exit 1
+              fi
             fi
-          fi
+          } 2>&1 | tee ci_artifacts/validate_config.log
 
       - name: Run tests
         if: steps.schedule_gate.outputs.should_run == 'true'
         run: |
-          python -m pytest -q
+          set -euo pipefail
+          python -m pytest -q 2>&1 | tee ci_artifacts/pytest.log
 
       - name: Validate manual force flags
         if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
-          if [ "${{ github.event.inputs.force_full_rebuild_and_resend }}" = "true" ] && [ "${{ github.event.inputs.force_resend_only }}" = "true" ]; then
-            echo "Choose only one mode: force_full_rebuild_and_resend OR force_resend_only"
-            exit 1
-          fi
+          {
+            if [ "${{ github.event.inputs.force_full_rebuild_and_resend }}" = "true" ] && [ "${{ github.event.inputs.force_resend_only }}" = "true" ]; then
+              echo "Choose only one mode: force_full_rebuild_and_resend OR force_resend_only"
+              exit 1
+            fi
+          } 2>&1 | tee ci_artifacts/validate_force_flags.log
 
       - name: Run tracker
         if: steps.schedule_gate.outputs.should_run == 'true' && !(github.event_name == 'workflow_dispatch' && (github.event.inputs.force_full_rebuild_and_resend == 'true' || github.event.inputs.force_resend_only == 'true'))
@@ -125,8 +149,11 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          mkdir -p data
-          python -m tracker
+          set -euo pipefail
+          {
+            mkdir -p data
+            python -m tracker
+          } 2>&1 | tee ci_artifacts/run_tracker.log
 
       - name: Force full rebuild and resend (manual)
         if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_full_rebuild_and_resend == 'true'
@@ -139,9 +166,10 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
+          set -euo pipefail
           mkdir -p data
-          python -m tracker --force-trend-recompute
-          python -m tracker --send-trend-summary-from-db --send-trend-summary-force
+          python -m tracker --force-trend-recompute 2>&1 | tee ci_artifacts/force_recompute.log
+          python -m tracker --send-trend-summary-from-db --send-trend-summary-force 2>&1 | tee ci_artifacts/force_resend_after_recompute.log
 
       - name: Force resend trend summary only (manual)
         if: steps.schedule_gate.outputs.should_run == 'true' && github.event_name == 'workflow_dispatch' && github.event.inputs.force_resend_only == 'true'
@@ -154,33 +182,58 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
-          python -m tracker --send-trend-summary-from-db --send-trend-summary-force
+          set -euo pipefail
+          python -m tracker --send-trend-summary-from-db --send-trend-summary-force 2>&1 | tee ci_artifacts/force_resend_only.log
 
       - name: Commit state file if changed
         if: steps.schedule_gate.outputs.should_run == 'true'
         run: |
           set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f data/tracker.sqlite3
-          if git diff --staged --quiet; then
-            echo "No state changes to commit."
-            exit 0
-          fi
-          git commit -m "chore: update tracker state [skip ci]"
-          target_branch="${GITHUB_REF_NAME:-main}"
-          for attempt in 1 2 3; do
-            if git push origin "HEAD:${target_branch}"; then
-              echo "Pushed state update to ${target_branch}."
+          {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -f data/tracker.sqlite3
+            if git diff --staged --quiet; then
+              echo "No state changes to commit."
               exit 0
             fi
-            echo "Push failed on attempt ${attempt}. Rebasing onto origin/${target_branch}..."
-            git fetch origin "${target_branch}"
-            if ! git rebase "origin/${target_branch}"; then
-              git rebase --abort || true
-              echo "Rebase conflict while updating tracker state."
-              exit 1
-            fi
-          done
-          echo "Failed to push state update after retries."
-          exit 1
+            git commit -m "chore: update tracker state [skip ci]"
+            target_branch="${GITHUB_REF_NAME:-main}"
+            for attempt in 1 2 3; do
+              if git push origin "HEAD:${target_branch}"; then
+                echo "Pushed state update to ${target_branch}."
+                exit 0
+              fi
+              echo "Push failed on attempt ${attempt}. Rebasing onto origin/${target_branch}..."
+              git fetch origin "${target_branch}"
+              if ! git rebase "origin/${target_branch}"; then
+                git rebase --abort || true
+                echo "Rebase conflict while updating tracker state."
+                exit 1
+              fi
+            done
+            echo "Failed to push state update after retries."
+            exit 1
+          } 2>&1 | tee ci_artifacts/commit_state.log
+
+      - name: Upload CI diagnostics artifact
+        if: always() && steps.schedule_gate.outputs.should_run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 13f-tracker-diagnostics-${{ github.run_id }}
+          path: |
+            ci_artifacts/**
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish diagnostics summary
+        if: always() && steps.schedule_gate.outputs.should_run == 'true'
+        run: |
+          {
+            echo "### 13F Tracker Diagnostics"
+            echo "- Artifact: \`13f-tracker-diagnostics-${{ github.run_id }}\`"
+            echo "- Event: \`${{ github.event_name }}\`"
+            echo "- Ref: \`${{ github.ref_name }}\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- UTC finished: \`$(date -u '+%Y-%m-%dT%H:%M:%SZ')\`"
+          } >> "$GITHUB_STEP_SUMMARY"
