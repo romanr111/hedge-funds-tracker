@@ -102,11 +102,32 @@ python -m tracker --force-trend-recompute
 python -m tracker --show-trends-detailed
 python -m tracker --show-trends-only
 python -m tracker --show-trends-only --trends-quarter 2025Q4
+python -m tracker --show-trends-only --trends-view raw --trends-quarter 2025Q4
+python -m tracker --show-trends-only --trends-explain MSFT --trends-quarter 2025Q4
 python -m tracker --test-notification
 python -m tracker --backfill-trend-history
 python -m tracker --backfill-trend-history --backfill-from-quarter 2023Q1 --backfill-to-quarter 2024Q4
 python -m tracker --backfill-trend-history --backfill-force --backfill-include-latest
 ```
+
+Trend output defaults to a long-term shortlist. It promotes directional rows
+with multi-manager support or directional persistence and keeps one-manager
+first-quarter reversals in raw/explain output instead of the main shortlist.
+The second section is reduction pressure from reported long holdings, not a
+short-position signal. The default CLI output also prints the portfolio value
+and shares direction breakdown for the compared quarters.
+
+DB-only trend commands:
+```bash
+python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4
+python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4 --view raw
+python scripts/evaluate_trend_ideas.py --db data/tracker.sqlite3 --quarters 2024Q4 2025Q1 2025Q2
+```
+
+`scripts/evaluate_trend_ideas.py` measures raw directional candidates against
+the promoted shortlist using each quarter's latest stored filing acceptance
+date, mapped symbols, available historical prices, and 30/90/180-day
+forward-return and benchmark-relative coverage.
 
 ### Portfolio Positions Trend Analyzer (MVP)
 Separate DB-only module for analyzing trends by a direct portfolio tickers list.
@@ -138,7 +159,7 @@ Arguments:
 - `--skip-live-prices` (optional): disable live `stooq` quote lookup for `Data Fresh`.
 
 By default the script tries to load live prices from `stooq` for tickers from your input file and uses them to calculate
-`Data Fresh` (`✅` fresh, `❌` stale, `-` unknown).
+`Data Fresh` (`+` fresh, `-` stale, `?` no matched market quote).
 
 Output JSON structure:
 - `report_quarter`, `previous_quarter`, `status`, `rows[]`
@@ -164,7 +185,7 @@ Observed result on `2025Q4` (sample tickers: `AMZN,META,MSFT,NKE,PM,CMG,VOO,COP,
 - Total tickers: `9`
 - `OK`: `7`, `NO_DATA`: `2` (`VOO`, `COP` are unmapped in symbols file)
 - Action mix for `OK`: `SELL=1`, `IDEA_BUY=2`, `IDEA_SELL=3`, `MONITOR_BUY=1`
-- Freshness mix for `OK`: `✅=4`, `❌=2`, `-=1`
+- Freshness mix for `OK`: `+=4`, `-=2`, `?=1`
 
 Flag reference:
 - `--help`
@@ -183,19 +204,29 @@ Flag reference:
   Forces trend engine recalculation even when fingerprints are unchanged (bypasses `skipped_no_new_completed_quarter`
   and `skipped_no_top_change` short-circuit paths).
 - `--show-trends-detailed`
-  Always prints the detailed trends table after the run (same style as `scripts/show_trends.py`), including non-interactive output.
+  Always prints trend output after the run, including non-interactive output.
+  The default view is the long-term shortlist.
   Related options:
-  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
-  Ideas output for buy/sell sections is capped at 8 rows per section.
+  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-view`,
+  `--trends-explain`, `--trends-show-reversals`, `--trends-symbols-file`.
+  Output is capped at 8 rows per promoted buy/reduction section.
 - `--show-trends-only`
-  Prints the detailed trends table directly from existing SQLite signals and exits.
+  Prints trend output directly from existing SQLite signals and exits.
   Does not execute SEC polling, snapshot sync, trend recompute, notifications, or backfill.
   Uses the same related options:
-  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-show-reversals`, `--trends-symbols-file`.
-  Ideas output for buy/sell sections is capped at 8 rows per section.
+  `--trends-quarter`, `--trends-min-conf`, `--trends-limit`, `--trends-view`,
+  `--trends-explain`, `--trends-show-reversals`, `--trends-symbols-file`.
+- `--trends-view shortlist|raw`
+  `shortlist` is default. `raw` prints the broad diagnostic buy/sell/reversal
+  tables; both views print the portfolio value and shares breakdown.
+- `--trends-explain SYMBOL_OR_INSTRUMENT`
+  Resolves a mapped ticker, CUSIP, or instrument key and explains selector
+  state, score ingredients, support, freshness, crowding, and stored top contributors.
 - `--trend-live-prices-symbols-file`
   JSON map used for live prices from `stooq` (key: CUSIP/instrument_key, value: ticker),
-  default `config/cusip_tickers.json`.
+  default `config/cusip_tickers.json`. The repo default map includes the top
+  400 identifiers from the State Street SPY daily holdings export plus tracked
+  non-SPY mappings.
 - `--test-notification`
   Sends a test notification immediately through configured notifiers and exits.
   Does not poll SEC and cannot be combined with `--dry-run` or `clean_state`.
@@ -209,13 +240,15 @@ Flag reference:
   Includes latest completed quarter in backfill mode (excluded by default).
 
 Interactive UX note:
-- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints the detailed trend table by default.
-- To force the same detailed output in non-interactive runs, use:
+- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints the shortlist by default.
+- To force the same shortlist output in non-interactive runs, use:
   `python -m tracker --show-trends-detailed`
-- To print table only from already saved DB signals (without data collection), use:
+- To print saved trend signals without data collection, use:
   `python -m tracker --show-trends-only`
-- You can also print the same format directly with:
+- You can print the same shortlist directly with:
   `python scripts/show_trends.py --db <DB_PATH> --quarter <YYYYQn>`
+- Use `--trends-view raw` or `scripts/show_trends.py --view raw` for the older
+  broad diagnostic table.
 
 Backfill note:
 - Main trend engine remains latest-quarter only in the default tracker run.
@@ -280,7 +313,9 @@ Final signal:
 - `trend_delta = trend_ewma - prev_trend_ewma`
 - regime is classified from sign, persistence, gates, and delta (`STRONG_BUY`, `REVERSAL_SELL`, etc.).
 
-### 6) Table actions (research, not auto-trading)
+### 6) Output actions (research, not auto-trading)
+- Default shortlist ranking uses `abs(accumulation_score) * confidence`, then
+  support and freshness tie-breaks. Use raw output for the underlying trend table.
 - `BUY`, `SELL`, `INTERESTING_IDEA`, `MONITOR`
 - `BUY`/`SELL` = target reached for `Strong` setup.
 - `INTERESTING_IDEA` = direction exists and target gap is `<= 5` percentage points.

@@ -16,6 +16,7 @@ try:
         setup_for_regime,
         target_confidence_for_regime,
     )
+    from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 except ModuleNotFoundError as exc:
     if exc.name != "tracker":
         raise
@@ -31,6 +32,7 @@ except ModuleNotFoundError as exc:
         setup_for_regime,
         target_confidence_for_regime,
     )
+    from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
@@ -86,6 +88,15 @@ def _ticker_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
     return "UNKNOWN"
 
 
+def _instrument_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
+    ticker = _ticker_for_signal(signal, symbol_map)
+    if ticker not in {str(signal.instrument_key or "").strip().upper(), str(signal.cusip or "").strip().upper()}:
+        return ticker
+    identifier = str(signal.instrument_key or signal.cusip or "UNKNOWN").strip().upper()
+    issuer = str(signal.issuer_name or "Unknown issuer").strip()
+    return f"{issuer} [unmapped: {identifier}]"
+
+
 def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> None:
     print()
     print(title)
@@ -115,6 +126,128 @@ def _freshness_icon(signal: Any) -> str:
     return freshness_icon(getattr(signal, "freshness_ok", None))
 
 
+def _freshness_text(signal: Any) -> str:
+    freshness_ok = getattr(signal, "freshness_ok", None)
+    if freshness_ok is None:
+        return "No quote"
+    return "Fresh" if freshness_ok else "Stale"
+
+
+def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> list[str]:
+    signal = decision.signal
+    why = "Multi-manager support" if decision.directional_managers >= 2 else "Persistent trend"
+    return [
+        _instrument_for_signal(signal, symbol_map),
+        _setup_for_signal(signal),
+        f"{decision.idea_score:.4f}",
+        f"{decision.directional_managers}/{decision.opposite_managers}",
+        f"{round(float(signal.confidence) * 100)}%",
+        _freshness_text(signal),
+        why,
+    ]
+
+
+def _print_shortlist(
+    *,
+    quarter: str,
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    min_conf: float,
+    limit: int,
+) -> None:
+    selection = select_trend_ideas(signals, min_conf=min_conf, limit=limit)
+    print(f"Report quarter: {quarter}")
+    print(f"Stored signals: {len(signals)}")
+    print(
+        "Directional candidates: "
+        f"Buy {selection.buy_candidates_count} | Reduction {selection.reduction_candidates_count}"
+    )
+    print(
+        "Promoted shortlist: "
+        f"Buy {len(selection.promoted_buy)} | Reduction {len(selection.promoted_reduction)} "
+        f"| Monitored {len(selection.monitored)}"
+    )
+    headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Why"]
+    _print_section("Top Buy Ideas", headers, [_shortlist_row(item, symbol_map) for item in selection.promoted_buy])
+    _print_section(
+        "Top Reduction Trends",
+        headers,
+        [_shortlist_row(item, symbol_map) for item in selection.promoted_reduction],
+    )
+
+
+def _print_raw_trends(
+    *,
+    quarter: str,
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    min_conf: float,
+    limit: int,
+    show_reversals: bool,
+) -> None:
+    effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
+    buy = sorted(
+        [
+            item
+            for item in signals
+            if (
+                "BUY" in item.regime
+                and item.regime != "REVERSAL_SELL"
+                and item.confidence >= min_conf
+                and item.trend_ewma >= BUY_TABLE_MIN_TREND
+            )
+        ],
+        key=lambda item: item.trend_ewma,
+        reverse=True,
+    )[:effective_limit]
+    sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
+    sell = sorted(
+        [
+            item
+            for item in signals
+            if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
+        ],
+        key=lambda item: item.trend_ewma,
+    )[:effective_limit]
+    reversals = sorted(
+        [
+            item
+            for item in signals
+            if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= min_conf
+        ],
+        key=lambda item: abs(item.trend_delta),
+        reverse=True,
+    )[:effective_limit]
+
+    print(f"Report quarter: {quarter}")
+    print(f"Signals total: {len(signals)}")
+    headers = [
+        "Ticker",
+        "Action",
+        "Setup (Regime)",
+        "Conviction / Target",
+        "Trend",
+        "Consensus (+/-)",
+        "Data Fresh",
+    ]
+
+    def _row(item: Any) -> list[str]:
+        return [
+            _ticker_for_signal(item, symbol_map),
+            _action_for_signal(item),
+            _setup_for_signal(item),
+            _conviction_target_for_signal(item),
+            f"{item.trend_ewma:.4f}",
+            f"{item.buy_managers}/{item.sell_managers}",
+            _freshness_icon(item),
+        ]
+
+    _print_section("Top Buy Trends", headers, [_row(item) for item in buy])
+    _print_section("Top Sell Trends", headers, [_row(item) for item in sell])
+    if show_reversals:
+        _print_section("Reversals", headers, [_row(item) for item in reversals])
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Print trend signals by quarter.")
     parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB (default: data/tracker.sqlite3)")
@@ -124,17 +257,23 @@ def main() -> int:
         "--min-conf",
         type=float,
         default=0.45,
-        help="Buy/reversal confidence threshold (default: 0.45; sells use min(threshold, 0.35)).",
+        help="Buy/reversal confidence threshold (default: 0.45; reductions use min(threshold, 0.35)).",
     )
     parser.add_argument(
         "--show-reversals",
         action="store_true",
-        help="Print reversals section (disabled by default).",
+        help="Print raw reversals section (disabled by default).",
     )
     parser.add_argument(
         "--symbols-file",
         default="config/cusip_tickers.json",
         help="JSON map for symbols: {\"CUSIP\": \"TICKER\"} or {\"CUSIP|PUTCALL\": \"TICKER\"}.",
+    )
+    parser.add_argument(
+        "--view",
+        choices=["shortlist", "raw"],
+        default="shortlist",
+        help="Output view: long-term shortlist (default) or raw diagnostics.",
     )
     args = parser.parse_args()
 
@@ -162,83 +301,23 @@ def main() -> int:
             print(f"No trend signals found for {quarter}.")
             return 0
 
-        effective_limit = max(1, min(args.limit, IDEAS_OUTPUT_MAX_ROWS))
-
-        buy = sorted(
-            [
-                item
-                for item in signals
-                if (
-                    "BUY" in item.regime
-                    and item.regime != "REVERSAL_SELL"
-                    and item.confidence >= args.min_conf
-                    and item.trend_ewma >= BUY_TABLE_MIN_TREND
-                )
-            ],
-            key=lambda item: item.trend_ewma,
-            reverse=True,
-        )[:effective_limit]
-        sell_min_conf = min(args.min_conf, SELL_TABLE_MIN_CONF)
-        sell = sorted(
-            [
-                item
-                for item in signals
-                if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
-            ],
-            key=lambda item: item.trend_ewma,
-        )[:effective_limit]
-        reversals = sorted(
-            [
-                item
-                for item in signals
-                if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= args.min_conf
-            ],
-            key=lambda item: abs(item.trend_delta),
-            reverse=True,
-        )[:effective_limit]
-
-        print(f"Report quarter: {quarter}")
-        print(f"Signals total: {len(signals)}")
-
-        headers = [
-            "Ticker",
-            "Action",
-            "Setup (Regime)",
-            "Conviction / Target",
-            "Trend",
-            "Consensus (+/-)",
-            "Data Fresh",
-        ]
-
-        def _row(item: Any) -> list[str]:
-            row = [
-                _ticker_for_signal(item, symbol_map),
-                _action_for_signal(item),
-                _setup_for_signal(item),
-                _conviction_target_for_signal(item),
-                f"{item.trend_ewma:.4f}",
-                f"{item.buy_managers}/{item.sell_managers}",
-                _freshness_icon(item),
-            ]
-            return row
-
-        buy_rows = [
-            _row(item)
-            for item in buy
-        ]
-        sell_rows = [
-            _row(item)
-            for item in sell
-        ]
-        reversal_rows = [
-            _row(item)
-            for item in reversals
-        ]
-
-        _print_section("Top Buy Trends", headers, buy_rows)
-        _print_section("Top Sell Trends", headers, sell_rows)
-        if args.show_reversals:
-            _print_section("Reversals", headers, reversal_rows)
+        if args.view == "raw":
+            _print_raw_trends(
+                quarter=quarter,
+                signals=signals,
+                symbol_map=symbol_map,
+                min_conf=args.min_conf,
+                limit=args.limit,
+                show_reversals=args.show_reversals,
+            )
+        else:
+            _print_shortlist(
+                quarter=quarter,
+                signals=signals,
+                symbol_map=symbol_map,
+                min_conf=args.min_conf,
+                limit=max(1, min(args.limit, IDEAS_OUTPUT_MAX_ROWS)),
+            )
         return 0
     finally:
         store.close()

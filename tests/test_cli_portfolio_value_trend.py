@@ -155,7 +155,46 @@ def test_compute_portfolio_value_trend_summary_classifies_growth_hold_reduction(
     assert summary.current_total_shares == 5_750
 
 
-def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
+def test_print_raw_trend_table_includes_portfolio_value_trend_summary(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
+    _seed_trend_and_snapshot_data(db_path)
+
+    store = StateStore(db_path)
+    try:
+        cli_main_module._print_detailed_trend_table(
+            store,
+            "2025Q4",
+            min_conf=0.5,
+            limit=8,
+            show_reversals=False,
+            symbols_file=str(symbols_path),
+            manager_ciks=["0000000001", "0000000002", "0000000003", "0000000004"],
+            view="raw",
+        )
+    finally:
+        store.close()
+
+    captured = capsys.readouterr()
+    assert "Top Buy Trends" in captured.out
+    assert "Top Sell Trends" in captured.out
+    assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
+    assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
+    assert "Managers analyzed: 3/4" in captured.out
+    assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
+    assert "Aggregate portfolio shares: 6,000 -> 5,750 (-4.2% Holding)" in captured.out
+    assert "Value Direction Breakdown" in captured.out
+    assert "Shares Direction Breakdown" in captured.out
+    assert "Managers analyzed (Shares):" not in captured.out
+    assert "Growing" in captured.out
+    assert "Holding" in captured.out
+    assert "Reducing" in captured.out
+
+
+def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     db_path = tmp_path / "tracker.sqlite3"
@@ -178,16 +217,42 @@ def test_print_detailed_trend_table_includes_portfolio_value_trend_summary(
         store.close()
 
     captured = capsys.readouterr()
-    assert "Top Buy Trends" in captured.out
-    assert "Top Sell Trends" in captured.out
+    assert "Top Buy Ideas" in captured.out
+    assert "Top Reduction Trends" in captured.out
+    assert "Stored signals: 2" in captured.out
+    assert "Directional candidates: Buy 1 | Reduction 1" in captured.out
     assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
-    assert "Managers analyzed: 3/4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
     assert "Aggregate portfolio shares: 6,000 -> 5,750 (-4.2% Holding)" in captured.out
     assert "Value Direction Breakdown" in captured.out
     assert "Shares Direction Breakdown" in captured.out
-    assert "Managers analyzed (Shares):" not in captured.out
-    assert "Growing" in captured.out
-    assert "Holding" in captured.out
-    assert "Reducing" in captured.out
+
+
+def test_print_trend_explanation_resolves_mapped_symbol(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA"}')
+    _seed_trend_and_snapshot_data(db_path)
+
+    store = StateStore(db_path)
+    try:
+        cli_main_module._print_detailed_trend_table(
+            store,
+            "2025Q4",
+            min_conf=0.5,
+            limit=8,
+            symbols_file=str(symbols_path),
+            explain="AAA",
+        )
+    finally:
+        store.close()
+
+    captured = capsys.readouterr()
+    assert "Trend explanation: AAA" in captured.out
+    assert "Selector state: Promoted" in captured.out
+    assert "Regime: STRONG_BUY" in captured.out
+    assert "Impulse / Accumulation:" in captured.out
+    assert "Top contributors:" in captured.out

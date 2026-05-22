@@ -1,31 +1,42 @@
 ## Snapshot
 
-- Goal: Restore the expected Telegram trend summary path after Q1 2026 13F reports completed.
-- Success criteria: Coatue resolves to the SEC 13F filer CIK, delayed scheduled workflow starts still execute the selected Kyiv schedule, and focused verification explains the remaining Actions step needed to send the summary.
-- Current state: The fix branch was published and manual Actions run `26247310908` computed Q1 2026 trends and logged the Telegram trend-summary send.
-- Next action: Decide whether to merge the fix branch into `main` so scheduled main-branch runs use the corrected Coatue config and gate.
+- Goal: Implement Trend Output v2 and the requested shortlist follow-up so long-term hedge-fund ideas have mapped market freshness, full default portfolio context, and the added SEC-verified manager.
+- Success criteria: CLI/script/Telegram share promoted idea selection, default output reduces one-manager reversal noise, raw diagnostics remain available, the default map covers top SPY identifiers, the shortlist shows portfolio shares/breakdowns, and tests verify the new boundaries.
+- Current state: Shared selector, shortlist/raw/explain rendering, Telegram alignment, evaluation use case/script, freshness/map/portfolio follow-up, tests, and README updates are implemented on the isolated feature worktree.
+- Next action: Review the follow-up diff and decide whether to commit/publish the feature branch.
 - Open questions:
 - Stale/superseded:
 
 ## Git context
 
 - Repo root: /Users/roman/Documents/Development/hedge_funds_tracker
-- Working directory: /Users/roman/Documents/Development/hedge_funds_tracker
-- Branch: codex/fix-trend-summary-blockers
-- Base branch: origin/main
+- Working directory: /Users/roman/.codex/worktrees/trend-output-v2/hedge_funds_tracker
+- Branch: codex/trend-output-v2
+- Base branch: codex/fix-trend-summary-blockers
 - Merge status: not-merged
 
 ## Worktree detail
 
-- Worktree reason: hotfix
-- Ownership: config/managers.json, .github/workflows/13f-tracker.yml, CONTINUITY.md
+- Worktree reason: feature isolation from dirty primary docs checkout
+- Ownership: trend idea selection, trend output/rendering, evaluation script/use case, related tests, README.md, CONTINUITY.md
 - Conflicts:
 - Cleanup proof:
 
 ## Working set
 
+- tracker/domain/trend_ideas.py
+- tracker/interfaces/cli/main.py
+- tracker/domain/trend_telegram_message.py
+- tracker/domain/trend_presentation.py
+- tracker/application/use_cases/evaluate_trend_ideas.py
+- scripts/show_trends.py
+- scripts/evaluate_trend_ideas.py
+- config/cusip_tickers.json
 - config/managers.json
-- .github/workflows/13f-tracker.yml
+- tests/test_default_tracking_config.py
+- tests/test_trend_ideas.py
+- tests/test_evaluate_trend_ideas.py
+- README.md
 - CONTINUITY.md
 
 ## Done (recent)
@@ -34,6 +45,10 @@
 - Corrected Coatue to the SEC 13F filer CIK and changed the workflow gate to use the triggered cron plus Kyiv offset instead of delayed wall-clock hour.
 - Re-ran `git diff --check`, workflow YAML parsing, and manager JSON validation before publishing the manual-run branch.
 - Published the fix branch, triggered manual Actions run `26247310908`, and fast-forwarded the workflow-pushed SQLite state update locally.
+- Added shared promoted idea selection and switched CLI/script/Telegram shortlist paths to reduction-oriented long-term ranking while preserving raw diagnostics.
+- Added trend explanation rendering and a historical evaluation use case/script for symbol, price, and forward-return coverage before future formula changes.
+- Self-reviewed evaluation coverage windows and Telegram reduction wording, then added regression tests for both.
+- Expanded the default CUSIP map with top SPY holdings identifiers, restored default CLI portfolio shares/breakdowns, switched freshness markers to ASCII, and added Situational Awareness LP.
 
 ## Receipts
 
@@ -44,3 +59,16 @@
 - 2026-05-21: Container fallback test attempt failed because the Docker daemon socket was unavailable.
 - 2026-05-21: Workflow run `26247310908` passed GitHub-hosted pytest with `139 passed in 12.61s`.
 - 2026-05-21: Workflow run `26247310908` synced Coatue CIK `0001135730`, computed `2026Q1` trends with 219 signals, and logged `Trend analysis summary notification sent`.
+- 2026-05-21: Feature worktree `/Users/roman/.codex/worktrees/trend-output-v2/hedge_funds_tracker` created on `codex/trend-output-v2` from the committed hotfix branch tip because the primary checkout had pending README/continuity edits.
+- 2026-05-21: Focused Trend Output v2 suite passed with `21 passed in 0.85s` after fixing shortlist candidate counts to remain pre-limit.
+- 2026-05-21: Full Trend Output v2 verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `150 passed in 7.14s`.
+- 2026-05-21: Live Q1 shortlist smoke showed `Stored signals: 219`, `Directional candidates: Buy 10 | Reduction 11`, and `Promoted shortlist: Buy 4 | Reduction 8 | Monitored 7`; `--trends-explain SPGI` resolved stored contributors.
+- 2026-05-21: Self-review added bounded price lookahead for availability/forward-return coverage and rendered Telegram `SELL` shortlist labels as `REDUCE` for reduction framing.
+- 2026-05-21: Post-self-review full verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `153 passed in 6.83s`; `git diff --check` passed.
+- 2026-05-22: SEC EDGAR evidence identified Situational Awareness LP 13F filer CIK `0002045724` and Q1 2026 filing accession `0002045724-26-000008`.
+- 2026-05-22: State Street SPY daily holdings workbook dated 2026-05-21 supplied the top 400 CUSIP/ticker identifiers merged into `config/cusip_tickers.json`; the map grew from 149 to 470 entries while existing mappings won conflicts.
+- 2026-05-22: Local Stooq gateway smoke returned quotes for `AVGO` and `AMAT`; `--show-trends-only --trends-quarter 2026Q1` rendered those tickers plus the default portfolio shares and direction breakdowns from stored Q1 signals.
+- 2026-05-22: Temporary DB recompute loaded 468/470 configured market-price keys, stored Situational Awareness LP baseline accession `0002045724-26-000008`, recomputed Q1 with 243 signals, and turned mapped top-row freshness into market-derived states such as `AMAT` `Stale`.
+- 2026-05-22: Follow-up verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `155 passed in 14.88s`; `git diff --check` passed.
+- 2026-05-22: Final freshness marker tweak changed stale raw output from `!` to `-`; live remote check found no PR for `codex/fix-trend-summary-blockers` or `codex/trend-output-v2` before publication.
+- 2026-05-22: Post-marker verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `155 passed in 14.77s`; `git diff --check` passed.

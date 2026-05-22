@@ -26,6 +26,10 @@ def _signal(
     regime: str,
     confidence: float,
     trend_ewma: float,
+    buy_managers: int = 2,
+    sell_managers: int = 1,
+    persistence_buy: int = 1,
+    persistence_sell: int = 0,
 ) -> TrendStockSignal:
     return TrendStockSignal(
         report_quarter="2025Q4",
@@ -43,11 +47,11 @@ def _signal(
         trend_delta=0.01,
         breadth_buy_weight=0.1,
         breadth_sell_weight=0.0,
-        buy_managers=2,
-        sell_managers=1,
+        buy_managers=buy_managers,
+        sell_managers=sell_managers,
         crowding_hhi=0.1,
-        persistence_buy=1,
-        persistence_sell=0,
+        persistence_buy=persistence_buy,
+        persistence_sell=persistence_sell,
         regime=regime,
         contributors_json="[]",
         computed_at=datetime.now(timezone.utc).isoformat(),
@@ -217,11 +221,11 @@ def test_notify_trend_analysis_summary_sends_message_and_deduplicates(tmp_path: 
     assert "Quarter: 2025Q4" in body
     assert "Signals analyzed: 2" in body
     assert "Legend: Confidence=current vs target, Managers=buy/sell manager count" not in body
-    assert "🟢 Top Buy Trends (1)" in body
-    assert "🔴 Top Sell Trends (1)" in body
+    assert "🟢 Top Buy Ideas (1)" in body
+    assert "🔴 Top Reduction Trends (1)" in body
     assert "🟠 Reversals (0)" in body
     assert "1) AAA — ✅ BUY (Strong)" in body
-    assert "1) BBB — ⛔ SELL (Strong)" in body
+    assert "1) BBB — ⛔ REDUCE (Strong)" in body
     assert "Confidence: 80%" in body
     assert "vs target" not in body
     assert "Managers: Buy 4 / Sell 1" in body
@@ -334,3 +338,29 @@ def test_build_trend_message_payload_uses_idea_and_to_monitor_labels() -> None:
     assert "TO_MONITOR" in actions
     assert "INTERESTING_IDEA" not in actions
     assert "MONITOR" not in actions
+
+
+def test_build_trend_message_payload_uses_promoted_shortlist_selection() -> None:
+    payload = build_trend_message_payload(
+        report_quarter="2025Q4",
+        signals=[
+            _signal(
+                instrument_key="111111111",
+                regime="REVERSAL_BUY",
+                confidence=0.80,
+                trend_ewma=0.02,
+                buy_managers=2,
+            ),
+            _signal(
+                instrument_key="222222222",
+                regime="REVERSAL_BUY",
+                confidence=0.90,
+                trend_ewma=0.08,
+                buy_managers=1,
+                sell_managers=0,
+            ),
+        ],
+        symbol_map={"111111111": "AAA", "222222222": "BBB"},
+    )
+
+    assert [row.ticker for row in payload.buy_rows] == ["AAA"]
