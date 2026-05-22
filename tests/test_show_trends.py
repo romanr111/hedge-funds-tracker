@@ -49,7 +49,28 @@ def _seed_trend_signals(db_path: Path, *, with_freshness: bool = False) -> None:
                     persistence_buy=2,
                     persistence_sell=0,
                     regime="STRONG_BUY",
-                    contributors_json="[]",
+                    contributors_json=json.dumps(
+                        [
+                            {
+                                "manager_name": "TCI Fund Management Ltd",
+                                "signal_value": 0.40,
+                                "manager_weight_configured": 1.0,
+                            },
+                            {"manager_name": "Opposing Fund", "signal_value": -0.35},
+                            {
+                                "manager_name": "Coatue Management LLC",
+                                "signal_value": 0.30,
+                                "manager_weight_configured": 1.0,
+                            },
+                            {
+                                "manager_name": "Appaloosa Management LP",
+                                "signal_value": 0.20,
+                                "manager_weight_configured": 1.5,
+                            },
+                            {"manager_name": "Fund Four", "signal_value": 0.10},
+                        ],
+                        separators=(",", ":"),
+                    ),
                     computed_at=now_iso,
                     freshness_multiplier=0.82 if with_freshness else 1.0,
                     freshness_ok=True if with_freshness else None,
@@ -191,6 +212,9 @@ def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
     assert "Idea Score" in result.stdout
     assert "Freshness" in result.stdout
     assert "No quote" in result.stdout
+    assert "[TCI, Coatue, ✅ Appaloosa]" in result.stdout
+    assert "Opposing Fund" not in result.stdout
+    assert "Multi-manager support" not in result.stdout
     output_rows = _section_rows(result.stdout, "Top Buy Ideas") + _section_rows(result.stdout, "Top Reduction Trends")
     assert output_rows
     assert all("CUSIP" not in row for row in output_rows)

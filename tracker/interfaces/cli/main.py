@@ -28,6 +28,7 @@ from tracker.domain.quarters import parse_report_quarter
 from tracker.domain.trend_presentation import (
     action_for_signal,
     conviction_target,
+    directional_contributor_names,
     freshness_icon,
     setup_for_regime,
     target_confidence_for_regime,
@@ -410,7 +411,7 @@ def _print_portfolio_value_trend_summary(
 
 def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> list[str]:
     signal = decision.signal
-    why = "Multi-manager support" if decision.directional_managers >= 2 else "Persistent trend"
+    direction = decision.direction.value if decision.direction is not None else ""
     return [
         _instrument_for_signal(signal, symbol_map),
         _setup_for_signal(signal),
@@ -418,7 +419,7 @@ def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> l
         f"{decision.directional_managers}/{decision.opposite_managers}",
         f"{round(float(signal.confidence) * 100)}%",
         _freshness_text(signal),
-        why,
+        directional_contributor_names(signal.contributors_json, direction),
     ]
 
 
@@ -445,7 +446,7 @@ def _print_shortlist_trend_table(
         f"Buy {len(selection.promoted_buy)} | Reduction {len(selection.promoted_reduction)} "
         f"| Monitored {len(selection.monitored)}"
     )
-    headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Why"]
+    headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Top Contributors"]
     _print_section("Top Buy Ideas", headers, [_shortlist_row(item, symbol_map) for item in selection.promoted_buy])
     _print_section(
         "Top Reduction Trends",

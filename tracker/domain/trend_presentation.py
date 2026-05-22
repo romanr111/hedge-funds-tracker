@@ -1,7 +1,25 @@
 from __future__ import annotations
 
+import json
+import re
+
 
 SELL_TABLE_MIN_CONF = 0.35
+HIGH_SIGNAL_WEIGHT_THRESHOLD = 1.0
+MANAGER_SHORT_NAME_OVERRIDES = {
+    "TCI Fund Management Ltd": "TCI",
+    "Coatue Management LLC": "Coatue",
+    "Appaloosa Management LP": "Appaloosa",
+    "Pershing Square Capital Management, L.P.": "Pershing Square",
+    "Viking Global Investors LP": "Viking Global",
+    "Li Lu - Himalaya Capital Management": "Himalaya",
+    "Bill Nygren - Oakmark Select Fund": "Oakmark",
+    "Richard Pzena - Hancock Classic Value": "Pzena",
+    "Francois Rochon - Giverny Capital": "Giverny",
+    "Christopher Davis - Davis Advisors": "Davis",
+    "Thomas Gayner - Markel Group": "Markel",
+}
+LEGAL_SUFFIX_PATTERN = re.compile(r"(?:,?\s+(?:L\.?P\.?|L\.?L\.?C\.?|LTD\.?|INC\.?))$", re.IGNORECASE)
 
 
 def target_confidence_for_regime(regime: str) -> float:
@@ -56,3 +74,48 @@ def freshness_icon(freshness_ok: bool | None) -> str:
     if freshness_ok is None:
         return "?"
     return "+" if bool(freshness_ok) else "-"
+
+
+def _compact_manager_name(name: str) -> str:
+    known_name = MANAGER_SHORT_NAME_OVERRIDES.get(name)
+    if known_name is not None:
+        return known_name
+    return LEGAL_SUFFIX_PATTERN.sub("", name).strip()
+
+
+def _configured_weight(contributor: dict[str, object]) -> float | None:
+    raw_weight = contributor.get("manager_weight_configured")
+    if isinstance(raw_weight, (int, float)):
+        return float(raw_weight)
+    return None
+
+
+def directional_contributor_names(contributors_json: str, direction: str, *, limit: int = 3) -> str:
+    try:
+        contributors = json.loads(contributors_json)
+    except (TypeError, json.JSONDecodeError):
+        return "-"
+    if not isinstance(contributors, list):
+        return "-"
+
+    buy_direction = direction == "BUY"
+    names: list[str] = []
+    for contributor in contributors:
+        if not isinstance(contributor, dict):
+            continue
+        signal_value = contributor.get("signal_value")
+        if not isinstance(signal_value, (int, float)):
+            continue
+        if (buy_direction and signal_value <= 0) or (not buy_direction and signal_value >= 0):
+            continue
+        name = str(contributor.get("manager_name") or contributor.get("manager_cik") or "").strip()
+        if name:
+            name = _compact_manager_name(name)
+            weight = _configured_weight(contributor)
+            if weight is not None and weight > HIGH_SIGNAL_WEIGHT_THRESHOLD:
+                name = f"✅ {name}"
+        if name and name not in names:
+            names.append(name)
+        if len(names) >= max(1, limit):
+            break
+    return f"[{', '.join(names)}]" if names else "-"

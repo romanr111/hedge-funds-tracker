@@ -21,3 +21,10 @@ def test_default_managers_include_sec_13f_situational_awareness_lp() -> None:
         manager.name == "Situational Awareness LP" and manager.cik == "0002045724"
         for manager in managers
     )
+
+
+def test_default_managers_weight_appaloosa_as_high_signal() -> None:
+    managers = load_managers(Path("config/managers.json"), None)
+
+    appaloosa = next(manager for manager in managers if manager.name == "Appaloosa Management LP")
+    assert appaloosa.weight == 1.5
