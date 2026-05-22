@@ -113,6 +113,7 @@ class _TradeRecord:
 class _ManagerContribution:
     manager_cik: str
     manager_name: str
+    manager_weight_configured: float
     manager_weight_base: float
     manager_quality_multiplier: float
     manager_weight_effective: float
@@ -586,15 +587,18 @@ def _compute_quarter_metrics(
     manager_effective_weights: dict[str, float],
     manager_quality: dict[str, float],
     *,
+    manager_configured_weights: dict[str, float] | None = None,
     contributor_limit: int,
 ) -> dict[str, _QuarterInstrumentMetric]:
     by_instrument: dict[str, list[_ManagerContribution]] = {}
     metadata_by_instrument: dict[str, dict[str, str | None]] = {}
+    configured_weights = manager_configured_weights or manager_base_weights
 
     for manager_cik, curr_snapshot in curr_snapshots.items():
         prev_snapshot = prev_snapshots.get(manager_cik)
         if prev_snapshot is None:
             continue
+        manager_weight_configured = configured_weights.get(manager_cik, 0.0)
         manager_weight_effective = manager_effective_weights.get(manager_cik, 0.0)
         manager_weight_base = manager_base_weights.get(manager_cik, 0.0)
         manager_quality_multiplier = manager_quality.get(manager_cik, 1.0)
@@ -659,6 +663,7 @@ def _compute_quarter_metrics(
             contribution = _ManagerContribution(
                 manager_cik=manager_cik,
                 manager_name=curr_snapshot.manager_name,
+                manager_weight_configured=manager_weight_configured,
                 manager_weight_base=manager_weight_base,
                 manager_quality_multiplier=manager_quality_multiplier,
                 manager_weight_effective=manager_weight_effective,
@@ -725,6 +730,7 @@ def _compute_quarter_metrics(
             {
                 "manager_cik": item.manager_cik,
                 "manager_name": item.manager_name,
+                "manager_weight_configured": round(item.manager_weight_configured, 8),
                 "manager_weight_base": round(item.manager_weight_base, 8),
                 "manager_quality_multiplier": round(item.manager_quality_multiplier, 8),
                 "manager_weight_effective": round(item.manager_weight_effective, 8),
@@ -854,6 +860,7 @@ def compute_trend_signals(
             normalized_base_weights,
             normalized_effective_weights,
             manager_quality,
+            manager_configured_weights=manager_weights,
             contributor_limit=contributor_limit,
         )
         quarter_abs_np_adj = [abs(metric.np_adj) for metric in quarter_metrics.values() if abs(metric.np_adj) > 0]

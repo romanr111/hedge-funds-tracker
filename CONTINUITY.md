@@ -1,9 +1,9 @@
 ## Snapshot
 
-- Goal: Implement Trend Output v2 and the requested shortlist follow-up so long-term hedge-fund ideas have mapped market freshness, full default portfolio context, and the added SEC-verified manager.
-- Success criteria: CLI/script/Telegram share promoted idea selection, default output reduces one-manager reversal noise, raw diagnostics remain available, the default map covers top SPY identifiers, the shortlist shows portfolio shares/breakdowns, and tests verify the new boundaries.
-- Current state: Shared selector, shortlist/raw/explain rendering, Telegram alignment, evaluation use case/script, freshness/map/portfolio follow-up, tests, and README updates are implemented on the isolated feature worktree.
-- Next action: Review the follow-up diff and decide whether to commit/publish the feature branch.
+- Goal: Improve merged Trend Output shortlist evidence with compact directional contributor names and a high-signal Appaloosa marker from recomputed stored payloads.
+- Success criteria: Appaloosa config weight is `1.5`, future contributor payloads retain raw configured weights, CLI/script shortlist rows show up to three compact directional contributors, and high-signal markers appear only from stored raw weight evidence.
+- Current state: The focused high-signal contributor patch is implemented on the contributor follow-up branch while local SQLite state stays uncommitted.
+- Next action: Review and publish the contributor follow-up when requested.
 - Open questions:
 - Stale/superseded:
 
@@ -11,8 +11,8 @@
 
 - Repo root: /Users/roman/Documents/Development/hedge_funds_tracker
 - Working directory: /Users/roman/.codex/worktrees/trend-output-v2/hedge_funds_tracker
-- Branch: codex/trend-output-v2
-- Base branch: codex/fix-trend-summary-blockers
+- Branch: codex/trend-shortlist-contributors
+- Base branch: merged Trend Output v2 feature tip
 - Merge status: not-merged
 
 ## Worktree detail
@@ -49,6 +49,7 @@
 - Added trend explanation rendering and a historical evaluation use case/script for symbol, price, and forward-return coverage before future formula changes.
 - Self-reviewed evaluation coverage windows and Telegram reduction wording, then added regression tests for both.
 - Expanded the default CUSIP map with top SPY holdings identifiers, restored default CLI portfolio shares/breakdowns, switched freshness markers to ASCII, and added Situational Awareness LP.
+- Added raw configured manager weight to future trend contributor payloads and compact high-signal Appaloosa evidence to CLI/script shortlist contributor labels.
 
 ## Receipts
 
@@ -72,3 +73,7 @@
 - 2026-05-22: Follow-up verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `155 passed in 14.88s`; `git diff --check` passed.
 - 2026-05-22: Final freshness marker tweak changed stale raw output from `!` to `-`; live remote check found no PR for `codex/fix-trend-summary-blockers` or `codex/trend-output-v2` before publication.
 - 2026-05-22: Post-marker verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `155 passed in 14.77s`; `git diff --check` passed.
+- 2026-05-22: PR #35 merged Trend Output v2 and its Q1 summary recovery base into remote `main` at merge commit `17baf16`; branch `codex/trend-shortlist-contributors` was created for the next shortlist contributor-label follow-up.
+- 2026-05-22: Raw freshness recheck observed `+`, `-`, and `?` in both `--trends-view raw` and `scripts/show_trends.py --view raw`; remote `origin/main` config recheck confirmed Situational Awareness LP CIK `0002045724` is merged.
+- 2026-05-22: Focused high-signal contributor verification passed for config, trend payload, formatter, CLI shortlist, script shortlist, and the direct `_compute_quarter_metrics` branch test; `git diff --check` passed.
+- 2026-05-22: Full high-signal contributor verification passed with `/Users/roman/Documents/Development/hedge_funds_tracker/.venv/bin/python -m pytest -q` reporting `159 passed in 14.43s`; a temporary Q1 backfill DB recompute rendered MSFT contributors as `[TCI, ✅ Appaloosa, Coatue]`.

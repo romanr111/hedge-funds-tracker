@@ -670,6 +670,25 @@ def test_compute_trend_signals_blend_modes_change_weighting() -> None:
         )
 
 
+def test_compute_trend_signals_preserves_configured_manager_weight_in_contributors() -> None:
+    quarters = ["2025Q3", "2025Q4"]
+    snapshots_by_quarter = {
+        "2025Q3": {"0000000001": _snapshot_for_compute(cik="0000000001", quarter="2025Q3", alpha_value=10, beta_value=990)},
+        "2025Q4": {"0000000001": _snapshot_for_compute(cik="0000000001", quarter="2025Q4", alpha_value=40, beta_value=960)},
+    }
+
+    result = compute_trend_signals(
+        quarters=quarters,
+        snapshots_by_quarter=snapshots_by_quarter,
+        manager_weights={"0000000001": 1.5},
+        blend_mode="tactical",
+    )
+
+    alpha = next(item for item in result.signals if item.instrument_key == "111111111")
+    assert alpha.contributors[0]["manager_weight_base"] == 1.0
+    assert alpha.contributors[0]["manager_weight_configured"] == 1.5
+
+
 def test_confidence_directional_and_disagreement_penalty() -> None:
     directional = _confidence_score(
         direction="BUY",

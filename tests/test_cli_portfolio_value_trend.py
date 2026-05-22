@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import importlib
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -52,7 +53,28 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
                     persistence_buy=2,
                     persistence_sell=0,
                     regime="STRONG_BUY",
-                    contributors_json="[]",
+                    contributors_json=json.dumps(
+                        [
+                            {
+                                "manager_name": "TCI Fund Management Ltd",
+                                "signal_value": 0.40,
+                                "manager_weight_configured": 1.0,
+                            },
+                            {"manager_name": "Opposing Fund", "signal_value": -0.35},
+                            {
+                                "manager_name": "Coatue Management LLC",
+                                "signal_value": 0.30,
+                                "manager_weight_configured": 1.0,
+                            },
+                            {
+                                "manager_name": "Appaloosa Management LP",
+                                "signal_value": 0.20,
+                                "manager_weight_configured": 1.5,
+                            },
+                            {"manager_name": "Fund Four", "signal_value": 0.10},
+                        ],
+                        separators=(",", ":"),
+                    ),
                     computed_at=now_iso,
                     freshness_multiplier=1.0,
                     freshness_ok=True,
@@ -221,6 +243,9 @@ def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
     assert "Top Reduction Trends" in captured.out
     assert "Stored signals: 2" in captured.out
     assert "Directional candidates: Buy 1 | Reduction 1" in captured.out
+    assert "[TCI, Coatue, ✅ Appaloosa]" in captured.out
+    assert "Opposing Fund" not in captured.out
+    assert "Multi-manager support" not in captured.out
     assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
