@@ -60,6 +60,7 @@ def _build_snapshot_index(snapshots: list[ManagerQuarterSnapshot]) -> dict[str, 
 
 def _build_input_fingerprint_payload(
     snapshots: list[ManagerQuarterSnapshot],
+    managers: list[_WeightedManagerLike],
     *,
     blend_mode: str,
     latest_prices: dict[str, float] | None,
@@ -81,10 +82,15 @@ def _build_input_fingerprint_payload(
                 "acceptance_datetime": snapshot.acceptance_datetime,
             }
         )
+    manager_weights_payload = {
+        manager.cik: round(float(manager.weight), 8)
+        for manager in sorted(managers, key=lambda m: m.cik)
+    }
     return {
         "engine_version": TREND_ENGINE_VERSION,
         "blend_mode": blend_mode,
         "latest_prices": latest_prices_payload,
+        "manager_weights": manager_weights_payload,
         "snapshots": payload,
     }
 
@@ -197,8 +203,9 @@ def run_trend_engine_for_target_quarter(
                     signals_count=0,
                 )
 
+    manager_weights = {manager.cik: float(manager.weight) for manager in managers}
     input_fingerprint = _fingerprint(
-        _build_input_fingerprint_payload(snapshots, blend_mode=blend_mode, latest_prices=resolved_latest_prices)
+        _build_input_fingerprint_payload(snapshots, list(managers), blend_mode=blend_mode, latest_prices=resolved_latest_prices)
     )
     previous_run = store.get_trend_run(target_quarter)
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -222,8 +229,6 @@ def run_trend_engine_for_target_quarter(
             backfill_batch_id=backfill_batch_id,
         )
         return TrendEngineResult(status=status, report_quarter=target_quarter, signals_count=0)
-
-    manager_weights = {manager.cik: float(manager.weight) for manager in managers}
     computed = compute_trend_signals(
         quarters=quarter_window,
         snapshots_by_quarter=snapshots_by_quarter,

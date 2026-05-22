@@ -404,6 +404,72 @@ def test_run_trend_engine_force_recompute_bypasses_unchanged_input_skip(tmp_path
         store.close()
 
 
+def test_run_trend_engine_recomputes_when_manager_weight_changes(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        # Fund A: bullish Alpha, bearish Beta
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(100, 900),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=_positions(500, 500),
+        )
+        # Fund B: bearish Alpha, bullish Beta
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q3",
+            accession="b-q3",
+            positions=_positions(900, 100),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000002",
+            name="Fund B",
+            quarter="2025Q4",
+            accession="b-q4",
+            positions=_positions(500, 500),
+        )
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+
+        first = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert first.status == "computed"
+        first_alpha = next(item for item in store.list_trend_stock_signals("2025Q4") if item.instrument_key == "111111111")
+        first_computed_at = first_alpha.computed_at
+
+        # Same weights → skip
+        second = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert second.status == "skipped_no_new_completed_quarter"
+
+        # Changed weight (drop Fund B to zero) → must recompute without force_recompute
+        managers_changed = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=0.0),
+        ]
+        third = run_trend_engine_for_latest_completed_quarter(managers_changed, store, dry_run=False)
+        assert third.status == "computed"
+        assert third.signals_count > 0
+
+        third_alpha = next(item for item in store.list_trend_stock_signals("2025Q4") if item.instrument_key == "111111111")
+        assert third_alpha.computed_at != first_computed_at
+    finally:
+        store.close()
+
+
 def test_run_trend_engine_for_target_quarter_marks_backfill_metadata(tmp_path: Path) -> None:
     store = StateStore(tmp_path / "tracker.sqlite3")
     try:
