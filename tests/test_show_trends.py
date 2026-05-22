@@ -152,7 +152,7 @@ def _section_rows(output: str, title: str) -> list[str]:
     return rows
 
 
-def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: Path) -> None:
+def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
     db_path = tmp_path / "tracker.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text(
@@ -184,19 +184,45 @@ def test_show_trends_applies_default_min_conf_and_hides_cusip_column(tmp_path: P
     assert "CCC" in result.stdout
     assert "BBB" not in result.stdout  # confidence 0.40 < default threshold 0.50
     assert "DDD" not in result.stdout  # trend 0.0009 < buy-table threshold 0.001
-    assert " | cusip " not in result.stdout
-    assert "Data Fresh" in result.stdout
-    assert "❌" not in result.stdout
-    output_rows = _section_rows(result.stdout, "Top Buy Trends") + _section_rows(result.stdout, "Top Sell Trends")
+    assert "Stored signals: 4" in result.stdout
+    assert "Directional candidates: Buy 1 | Reduction 1" in result.stdout
+    assert "Promoted shortlist: Buy 1 | Reduction 1 | Monitored 0" in result.stdout
+    assert "Instrument" in result.stdout
+    assert "Idea Score" in result.stdout
+    assert "Freshness" in result.stdout
+    assert "No quote" in result.stdout
+    output_rows = _section_rows(result.stdout, "Top Buy Ideas") + _section_rows(result.stdout, "Top Reduction Trends")
     assert output_rows
-    assert all(row.split("|")[-1].strip() == "-" for row in output_rows)
-    assert "INTERESTING_IDEA" in result.stdout
-    assert "SELL" in result.stdout
-    assert "WATCH" not in result.stdout
+    assert all("CUSIP" not in row for row in output_rows)
+    assert "Top Sell Trends" not in result.stdout
+    assert "Consensus (+/-)" not in result.stdout
     assert "delta" not in result.stdout
     assert "impulse" not in result.stdout
-    assert "accum" not in result.stdout
-    assert "issuer" not in result.stdout
+    assert "Conviction / Target" not in result.stdout
+
+
+def test_show_trends_raw_view_preserves_diagnostic_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA","222222222":"BBB","333333333":"CCC","444444444":"DDD"}')
+    _seed_trend_signals(db_path)
+
+    result = _run_show_trends(
+        "--db",
+        str(db_path),
+        "--quarter",
+        "2025Q4",
+        "--symbols-file",
+        str(symbols_path),
+        "--view",
+        "raw",
+    )
+
+    assert result.returncode == 0
+    assert "Top Buy Trends" in result.stdout
+    assert "Top Sell Trends" in result.stdout
+    assert "Ticker" in result.stdout
+    assert "Conviction / Target" in result.stdout
 
 
 def test_show_trends_caps_buy_and_sell_ideas_to_eight_rows(tmp_path: Path) -> None:
@@ -292,8 +318,8 @@ def test_show_trends_caps_buy_and_sell_ideas_to_eight_rows(tmp_path: Path) -> No
     )
 
     assert result.returncode == 0
-    assert len(_section_rows(result.stdout, "Top Buy Trends")) == 8
-    assert len(_section_rows(result.stdout, "Top Sell Trends")) == 8
+    assert len(_section_rows(result.stdout, "Top Buy Ideas")) == 8
+    assert len(_section_rows(result.stdout, "Top Reduction Trends")) == 8
 
 
 def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path) -> None:
@@ -349,7 +375,7 @@ def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: P
     )
 
     assert result.returncode == 0
-    assert "Data Fresh" in result.stdout
-    assert "✅" in result.stdout
-    assert "❌" in result.stdout
+    assert "Freshness" in result.stdout
+    assert "Fresh" in result.stdout
+    assert "Stale" in result.stdout
     assert "DDD" not in result.stdout

@@ -54,5 +54,5 @@ def conviction_target(confidence: float, regime: str) -> str:
 
 def freshness_icon(freshness_ok: bool | None) -> str:
     if freshness_ok is None:
-        return "-"
-    return "✅" if bool(freshness_ok) else "❌"
+        return "?"
+    return "+" if bool(freshness_ok) else "-"

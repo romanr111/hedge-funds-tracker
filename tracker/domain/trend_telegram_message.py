@@ -7,9 +7,10 @@ from typing import Any, Mapping, Sequence
 
 from tracker.domain.models import TrendStockSignal
 from tracker.domain.quarters import parse_report_quarter
+from tracker.domain.trend_ideas import select_trend_ideas
+from tracker.domain.trend_presentation import freshness_icon
 
 SELL_TABLE_MIN_CONF = 0.35
-BUY_TABLE_MIN_TREND = 0.001
 DEFAULT_MAX_ROWS = 8
 DEFAULT_PORTFOLIO_VALUE_HOLD_BAND = 0.05
 DEFAULT_PORTFOLIO_SHARES_HOLD_BAND = 0.05
@@ -144,9 +145,7 @@ def _target_pct_for_signal(signal: TrendStockSignal) -> int:
 
 
 def _freshness_icon(signal: TrendStockSignal) -> str:
-    if signal.freshness_ok is None:
-        return "❌"
-    return "✅" if bool(signal.freshness_ok) else "❌"
+    return freshness_icon(signal.freshness_ok)
 
 
 def _build_row(signal: TrendStockSignal, symbol_map: Mapping[str, str]) -> TrendMessageRow:
@@ -172,30 +171,9 @@ def build_trend_message_payload(
     limit: int = DEFAULT_MAX_ROWS,
 ) -> TrendMessagePayload:
     effective_limit = max(1, min(limit, DEFAULT_MAX_ROWS))
-    sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
-
-    buy_signals = sorted(
-        [
-            item
-            for item in signals
-            if (
-                "BUY" in item.regime
-                and item.regime != "REVERSAL_SELL"
-                and item.confidence >= min_conf
-                and item.trend_ewma >= BUY_TABLE_MIN_TREND
-            )
-        ],
-        key=lambda item: item.trend_ewma,
-        reverse=True,
-    )[:effective_limit]
-    sell_signals = sorted(
-        [
-            item
-            for item in signals
-            if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
-        ],
-        key=lambda item: item.trend_ewma,
-    )[:effective_limit]
+    selection = select_trend_ideas(signals, min_conf=min_conf, limit=effective_limit)
+    buy_signals = [row.signal for row in selection.promoted_buy]
+    sell_signals = [row.signal for row in selection.promoted_reduction]
     reversals_signals = sorted(
         [
             item
@@ -371,7 +349,7 @@ def _render_signal_row(row: TrendMessageRow, *, index: int) -> list[str]:
     trend = f"{row.trend_ewma:+.4f}"
     action_display = {
         "BUY": "✅ BUY",
-        "SELL": "⛔ SELL",
+        "SELL": "⛔ REDUCE",
         "IDEA": "💡 IDEA",
         "TO_MONITOR": "👀 TO_MONITOR",
     }.get(row.action, row.action)
@@ -436,9 +414,9 @@ def render_trend_telegram_notification(
         f"Signals analyzed: {payload.signals_total}",
         "",
     ]
-    lines.extend(_render_section("🟢 Top Buy Trends", payload.buy_rows))
+    lines.extend(_render_section("🟢 Top Buy Ideas", payload.buy_rows))
     lines.append("")
-    lines.extend(_render_section("🔴 Top Sell Trends", payload.sell_rows))
+    lines.extend(_render_section("🔴 Top Reduction Trends", payload.sell_rows))
     if show_reversals:
         lines.append("")
         lines.extend(_render_section("🟠 Reversals", payload.reversals_rows))

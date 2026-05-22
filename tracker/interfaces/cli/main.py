@@ -32,6 +32,7 @@ from tracker.domain.trend_presentation import (
     setup_for_regime,
     target_confidence_for_regime,
 )
+from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 from tracker.domain.timing import format_local_datetime, now_kyiv
 from tracker.infrastructure.logging import configure_logging, log_context, new_trace_id
 from tracker.infrastructure.market import StooqPriceGateway
@@ -118,6 +119,19 @@ def _ticker_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
     return "UNKNOWN"
 
 
+def _instrument_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
+    ticker = _ticker_for_signal(signal, symbol_map)
+    identifiers = {
+        str(signal.instrument_key or "").strip().upper(),
+        str(signal.cusip or "").strip().upper(),
+    }
+    if ticker not in identifiers:
+        return ticker
+    identifier = str(signal.instrument_key or signal.cusip or "UNKNOWN").strip().upper()
+    issuer = str(signal.issuer_name or "Unknown issuer").strip()
+    return f"{issuer} [unmapped: {identifier}]"
+
+
 def _action_for_signal(signal: Any) -> str:
     return action_for_signal(str(signal.regime or ""), float(signal.confidence))
 
@@ -136,6 +150,13 @@ def _conviction_target_for_signal(signal: Any) -> str:
 
 def _freshness_icon(signal: Any) -> str:
     return freshness_icon(getattr(signal, "freshness_ok", None))
+
+
+def _freshness_text(signal: Any) -> str:
+    freshness_ok = getattr(signal, "freshness_ok", None)
+    if freshness_ok is None:
+        return "No quote"
+    return "Fresh" if freshness_ok else "Stale"
 
 
 def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> None:
@@ -387,7 +408,122 @@ def _print_portfolio_value_trend_summary(
     print(_format_table(direction_headers, shares_rows))
 
 
-def _print_detailed_trend_table(
+def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> list[str]:
+    signal = decision.signal
+    why = "Multi-manager support" if decision.directional_managers >= 2 else "Persistent trend"
+    return [
+        _instrument_for_signal(signal, symbol_map),
+        _setup_for_signal(signal),
+        f"{decision.idea_score:.4f}",
+        f"{decision.directional_managers}/{decision.opposite_managers}",
+        f"{round(float(signal.confidence) * 100)}%",
+        _freshness_text(signal),
+        why,
+    ]
+
+
+def _print_shortlist_trend_table(
+    store: Any,
+    report_quarter: str,
+    *,
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    min_conf: float,
+    limit: int,
+    manager_ciks: list[str] | None,
+) -> None:
+    selection = select_trend_ideas(signals, min_conf=min_conf, limit=limit)
+    print()
+    print(f"Report quarter: {report_quarter}")
+    print(f"Stored signals: {len(signals)}")
+    print(
+        "Directional candidates: "
+        f"Buy {selection.buy_candidates_count} | Reduction {selection.reduction_candidates_count}"
+    )
+    print(
+        "Promoted shortlist: "
+        f"Buy {len(selection.promoted_buy)} | Reduction {len(selection.promoted_reduction)} "
+        f"| Monitored {len(selection.monitored)}"
+    )
+    headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Why"]
+    _print_section("Top Buy Ideas", headers, [_shortlist_row(item, symbol_map) for item in selection.promoted_buy])
+    _print_section(
+        "Top Reduction Trends",
+        headers,
+        [_shortlist_row(item, symbol_map) for item in selection.promoted_reduction],
+    )
+    _print_portfolio_value_trend_summary(store, report_quarter, manager_ciks=manager_ciks)
+
+
+def _resolve_explained_signal(
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    explain: str,
+) -> Any | None:
+    query = explain.strip().upper()
+    if not query:
+        return None
+    for item in signals:
+        keys = {
+            str(item.instrument_key or "").strip().upper(),
+            str(item.cusip or "").strip().upper(),
+        }
+        symbols = {symbol_map[key] for key in keys if key and key in symbol_map}
+        if query in keys or query in symbols:
+            return item
+    return None
+
+
+def _print_trend_explanation(
+    *,
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    explain: str,
+    min_conf: float,
+) -> None:
+    signal = _resolve_explained_signal(signals, symbol_map, explain)
+    if signal is None:
+        print(f"No trend signal found for {explain}.")
+        return
+
+    selection = select_trend_ideas(signals, min_conf=min_conf)
+    decision = selection.by_instrument[signal.instrument_key]
+    target_pct = round(_target_confidence_for_signal(signal) * 100)
+    contributors: list[Any]
+    try:
+        parsed_contributors = json.loads(signal.contributors_json)
+    except (TypeError, json.JSONDecodeError):
+        parsed_contributors = []
+    contributors = parsed_contributors if isinstance(parsed_contributors, list) else []
+
+    print()
+    print(f"Trend explanation: {_instrument_for_signal(signal, symbol_map)}")
+    print(f"Selector state: {decision.state.value}")
+    print(f"Selector reason: {decision.reason}")
+    print(f"Instrument key: {signal.instrument_key}")
+    print(f"Issuer: {signal.issuer_name or 'Unknown'}")
+    print(f"Regime: {signal.regime} | Setup: {_setup_for_signal(signal)}")
+    print(f"Raw trend / Delta: {signal.trend_ewma:+.4f} / {signal.trend_delta:+.4f}")
+    print(f"Impulse / Accumulation: {signal.impulse_score:+.4f} / {signal.accumulation_score:+.4f}")
+    print(f"Confidence / Target: {round(float(signal.confidence) * 100)}% / {target_pct}%")
+    print(f"Buy / Reduction manager support: {signal.buy_managers} / {signal.sell_managers}")
+    print(f"Persistence Buy / Reduction: {signal.persistence_buy} / {signal.persistence_sell}")
+    print(f"Freshness: {_freshness_text(signal)} | Multiplier: {signal.freshness_multiplier:.2f}")
+    print(f"Crowding HHI: {signal.crowding_hhi:.2f}")
+    print("Top contributors:")
+    if not contributors:
+        print("- none stored")
+        return
+    for item in contributors:
+        if not isinstance(item, dict):
+            continue
+        manager = str(item.get("manager_name") or item.get("manager_cik") or "Unknown manager")
+        signal_value = item.get("signal_value")
+        trade_dw = item.get("trade_dw")
+        print(f"- {manager}: signal {signal_value} | trade weight delta {trade_dw}")
+
+
+def _print_raw_trend_table(
     store: Any,
     report_quarter: str,
     *,
@@ -472,6 +608,49 @@ def _print_detailed_trend_table(
     )
     if show_reversals:
         _print_section("Reversals", headers, [_row(item) for item in reversals])
+
+
+def _print_detailed_trend_table(
+    store: Any,
+    report_quarter: str,
+    *,
+    min_conf: float = 0.45,
+    limit: int = IDEAS_OUTPUT_MAX_ROWS,
+    show_reversals: bool = False,
+    symbols_file: str = "config/cusip_tickers.json",
+    manager_ciks: list[str] | None = None,
+    view: str = "shortlist",
+    explain: str | None = None,
+) -> None:
+    symbol_map = _load_symbol_map(Path(symbols_file))
+    signals = store.list_trend_stock_signals(report_quarter)
+    if not signals:
+        print(f"No trend signals found for {report_quarter}.")
+        return
+    if explain:
+        _print_trend_explanation(signals=signals, symbol_map=symbol_map, explain=explain, min_conf=min_conf)
+        return
+    effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
+    if view == "raw":
+        _print_raw_trend_table(
+            store,
+            report_quarter,
+            min_conf=min_conf,
+            limit=effective_limit,
+            show_reversals=show_reversals,
+            symbols_file=symbols_file,
+            manager_ciks=manager_ciks,
+        )
+        return
+    _print_shortlist_trend_table(
+        store,
+        report_quarter,
+        signals=signals,
+        symbol_map=symbol_map,
+        min_conf=min_conf,
+        limit=effective_limit,
+        manager_ciks=manager_ciks,
+    )
 
 
 def _should_print_trend_table(*, dry_run: bool, status: str, report_quarter: str | None) -> bool:
@@ -566,12 +745,12 @@ def _main(logger: logging.Logger) -> int:
     parser.add_argument(
         "--show-trends-detailed",
         action="store_true",
-        help="Always print detailed trends table after tracker run (also in non-interactive output).",
+        help="Always print trend output after tracker run (also in non-interactive output).",
     )
     parser.add_argument(
         "--show-trends-only",
         action="store_true",
-        help="Print detailed trends table from existing DB signals and exit (no sync/trend recompute).",
+        help="Print trend output from existing DB signals and exit (no sync/trend recompute).",
     )
     parser.add_argument(
         "--send-trend-summary-from-db",
@@ -591,7 +770,7 @@ def _main(logger: logging.Logger) -> int:
         "--trends-min-conf",
         type=float,
         default=0.45,
-        help="Buy/reversal confidence for --show-trends-detailed/--show-trends-only (default: 0.45; sells use min(threshold, 0.35)).",
+        help="Buy/reversal confidence for --show-trends-detailed/--show-trends-only (default: 0.45; reductions use min(threshold, 0.35)).",
     )
     parser.add_argument(
         "--trends-limit",
@@ -602,7 +781,17 @@ def _main(logger: logging.Logger) -> int:
     parser.add_argument(
         "--trends-show-reversals",
         action="store_true",
-        help="Include reversals section in --show-trends-detailed/--show-trends-only output.",
+        help="Include reversals section in raw trend output.",
+    )
+    parser.add_argument(
+        "--trends-view",
+        choices=["shortlist", "raw"],
+        default="shortlist",
+        help="Trend output view: long-term shortlist (default) or raw diagnostics.",
+    )
+    parser.add_argument(
+        "--trends-explain",
+        help="Explain one trend signal by mapped ticker, CUSIP, or instrument key.",
     )
     parser.add_argument(
         "--trends-symbols-file",
@@ -646,6 +835,8 @@ def _main(logger: logging.Logger) -> int:
     backfill_to_quarter = getattr(args, "backfill_to_quarter", None)
     backfill_force = bool(getattr(args, "backfill_force", False))
     backfill_include_latest = bool(getattr(args, "backfill_include_latest", False))
+    trends_view = getattr(args, "trends_view", "shortlist")
+    trends_explain = getattr(args, "trends_explain", None)
 
     if args.test_notification and args.dry_run:
         logger.error("Cannot combine --test-notification with --dry-run")
@@ -761,6 +952,8 @@ def _main(logger: logging.Logger) -> int:
                 show_reversals=args.trends_show_reversals,
                 symbols_file=args.trends_symbols_file,
                 manager_ciks=manager_ciks,
+                view=trends_view,
+                explain=trends_explain,
             )
         runtime.store.close()
         logger.info(
@@ -950,6 +1143,8 @@ def _main(logger: logging.Logger) -> int:
                 show_reversals=args.trends_show_reversals,
                 symbols_file=args.trends_symbols_file,
                 manager_ciks=manager_ciks,
+                view=trends_view,
+                explain=trends_explain,
             )
     elif _should_print_trend_table(
         dry_run=args.dry_run,
@@ -964,6 +1159,8 @@ def _main(logger: logging.Logger) -> int:
             show_reversals=args.trends_show_reversals,
             symbols_file=args.trends_symbols_file,
             manager_ciks=manager_ciks,
+            view=trends_view,
+            explain=trends_explain,
         )
 
     notify_if_all_reports_published_for_current_quarter(
