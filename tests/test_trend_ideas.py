@@ -75,7 +75,7 @@ def test_select_trend_ideas_ranks_stale_rows_after_fresh_or_unknown_rows() -> No
 
     selection = select_trend_ideas([high_score_stale, fresh, unknown])
 
-    assert [row.signal.instrument_key for row in selection.promoted_buy] == ["unknown", "fresh", "stale"]
+    assert [row.signal.instrument_key for row in selection.promoted_buy] == ["fresh", "unknown", "stale"]
 
 
 def test_select_trend_ideas_uses_same_support_gate_for_reduction_candidates() -> None:

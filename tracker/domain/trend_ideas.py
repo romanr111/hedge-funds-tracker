@@ -82,7 +82,7 @@ def _direction_for_signal(signal: TrendStockSignal, *, min_conf: float) -> Trend
 
 
 def _idea_score(signal: TrendStockSignal) -> float:
-    return abs(float(signal.accumulation_score)) * float(signal.confidence)
+    return abs(float(signal.trend_ewma)) * float(signal.confidence)
 
 
 def _sort_key(decision: TrendIdeaDecision) -> tuple[bool, float, int, int, float, str]:

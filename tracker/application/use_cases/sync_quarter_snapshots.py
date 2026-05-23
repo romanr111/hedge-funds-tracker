@@ -77,7 +77,7 @@ def sync_quarter_snapshots(
         manager_upserted_rows = 0
         selected_quarters_count = 0
         try:
-            submissions = client.get_submissions(manager.cik)
+            submissions = client.get_all_submissions(manager.cik)
         except SubmissionsFetchError as exc:
             app_logger.warning(
                 "Skipping snapshot sync due to submissions error",

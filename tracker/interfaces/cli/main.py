@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import logging
 import math
@@ -19,6 +20,7 @@ from tracker.application.use_cases.notify_trend_analysis_summary import notify_t
 from tracker.application.use_cases.backfill_trend_history import run_backfill_trend_history
 from tracker.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
 from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
+from tracker.application.use_cases.export_trend_summary import export_trend_summary_if_changed
 from tracker.application.use_cases.track_manager import process_manager
 from tracker.composition import build_notifier_list, build_runtime
 from tracker.config import load_config
@@ -35,6 +37,11 @@ from tracker.domain.trend_presentation import (
 )
 from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 from tracker.domain.timing import format_local_datetime, now_kyiv
+from tracker.infrastructure.export.xlsx_exporter import (
+    PortfolioValueTrendData,
+    TrendSummaryWorkbookData,
+    TrendTable,
+)
 from tracker.infrastructure.logging import configure_logging, log_context, new_trace_id
 from tracker.infrastructure.market import StooqPriceGateway
 
@@ -409,6 +416,130 @@ def _print_portfolio_value_trend_summary(
     print(_format_table(direction_headers, shares_rows))
 
 
+def _build_trend_summary_workbook_data(
+    store: Any,
+    report_quarter: str,
+    *,
+    signals: list[Any],
+    symbol_map: dict[str, str],
+    min_conf: float,
+    limit: int,
+    manager_ciks: list[str] | None,
+    view: str = "shortlist",
+    show_reversals: bool = False,
+) -> TrendSummaryWorkbookData:
+    effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
+
+    if view == "raw":
+        sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
+        buy = sorted(
+            [
+                item
+                for item in signals
+                if (
+                    "BUY" in item.regime
+                    and item.regime != "REVERSAL_SELL"
+                    and item.confidence >= min_conf
+                    and item.trend_ewma >= BUY_TABLE_MIN_TREND
+                )
+            ],
+            key=lambda item: item.trend_ewma,
+            reverse=True,
+        )[:effective_limit]
+        sell = sorted(
+            [item for item in signals if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf],
+            key=lambda item: item.trend_ewma,
+        )[:effective_limit]
+        reversals = sorted(
+            [item for item in signals if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= min_conf],
+            key=lambda item: abs(item.trend_delta),
+            reverse=True,
+        )[:effective_limit]
+
+        headers = ["Ticker", "Action", "Setup (Regime)", "Conviction / Target", "Trend", "Consensus (+/-)", "Data Fresh"]
+
+        def _raw_row(item: Any) -> list[str]:
+            return [
+                _ticker_for_signal(item, symbol_map),
+                _action_for_signal(item),
+                _setup_for_signal(item),
+                _conviction_target_for_signal(item),
+                f"{item.trend_ewma:.4f}",
+                f"{item.buy_managers}/{item.sell_managers}",
+                _freshness_icon(item),
+            ]
+
+        top_buy = TrendTable(title="Top Buy Trends", headers=headers, rows=[_raw_row(item) for item in buy])
+        top_sell = TrendTable(title="Top Sell Trends", headers=headers, rows=[_raw_row(item) for item in sell])
+        rev_table: TrendTable | None = None
+        if show_reversals and reversals:
+            rev_table = TrendTable(title="Reversals", headers=headers, rows=[_raw_row(item) for item in reversals])
+    else:
+        selection = select_trend_ideas(signals, min_conf=min_conf, limit=limit)
+        headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Top Contributors"]
+        top_buy = TrendTable(
+            title="Top Buy Ideas",
+            headers=headers,
+            rows=[_shortlist_row(item, symbol_map) for item in selection.promoted_buy],
+        )
+        top_sell = TrendTable(
+            title="Top Reduction Trends",
+            headers=headers,
+            rows=[_shortlist_row(item, symbol_map) for item in selection.promoted_reduction],
+        )
+        rev_table = None
+
+    summary = _compute_portfolio_value_trend_summary(store, report_quarter, manager_ciks or [])
+
+    fingerprint_payload = {
+        "report_quarter": report_quarter,
+        "view": view,
+        "min_conf": min_conf,
+        "limit": limit,
+        "top_buy": top_buy.rows,
+        "top_sell": top_sell.rows,
+        "reversals": rev_table.rows if rev_table else None,
+        "portfolio_summary": summary.__dict__ if summary else None,
+    }
+    content_fingerprint = hashlib.sha256(
+        json.dumps(fingerprint_payload, sort_keys=True, default=str).encode()
+    ).hexdigest()
+
+    portfolio_data: PortfolioValueTrendData | None = None
+    if summary is not None:
+        portfolio_data = PortfolioValueTrendData(
+            report_quarter=summary.report_quarter,
+            previous_quarter=summary.previous_quarter,
+            selected_managers=summary.selected_managers,
+            analyzed_managers=summary.analyzed_managers,
+            missing_current=summary.missing_current,
+            missing_previous=summary.missing_previous,
+            growing_managers=summary.growing_managers,
+            holding_managers=summary.holding_managers,
+            reducing_managers=summary.reducing_managers,
+            previous_total_value_k=summary.previous_total_value_k,
+            current_total_value_k=summary.current_total_value_k,
+            shares_analyzed_managers=summary.shares_analyzed_managers,
+            shares_growing_managers=summary.shares_growing_managers,
+            shares_holding_managers=summary.shares_holding_managers,
+            shares_reducing_managers=summary.shares_reducing_managers,
+            previous_total_shares=summary.previous_total_shares,
+            current_total_shares=summary.current_total_shares,
+        )
+
+    return TrendSummaryWorkbookData(
+        report_quarter=report_quarter,
+        view_mode=view,
+        min_conf=min_conf,
+        limit=limit,
+        top_buy=top_buy,
+        top_sell=top_sell,
+        reversals=rev_table,
+        portfolio_value_trend=portfolio_data,
+        content_fingerprint=content_fingerprint,
+    )
+
+
 def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> list[str]:
     signal = decision.signal
     direction = decision.direction.value if decision.direction is not None else ""
@@ -714,6 +845,56 @@ def _snapshot_sync_max_quarters(*, max_filing_age_days: int) -> int:
     return max(9, estimated_quarters_from_age)
 
 
+def _maybe_export_trend_summary(
+    store: Any,
+    report_quarter: str,
+    *,
+    export_xlsx_path: str,
+    min_conf: float,
+    limit: int,
+    show_reversals: bool,
+    symbols_file: str,
+    manager_ciks: list[str] | None,
+    view: str,
+    dry_run: bool,
+    logger: logging.Logger,
+) -> None:
+    symbol_map = _load_symbol_map(Path(symbols_file))
+    signals = store.list_trend_stock_signals(report_quarter)
+    if not signals:
+        logger.info("No trend signals to export", extra={"report_quarter": report_quarter})
+        return
+
+    data = _build_trend_summary_workbook_data(
+        store,
+        report_quarter,
+        signals=signals,
+        symbol_map=symbol_map,
+        min_conf=min_conf,
+        limit=limit,
+        manager_ciks=manager_ciks,
+        view=view,
+        show_reversals=show_reversals,
+    )
+
+    path = Path(export_xlsx_path)
+    if path.suffix != ".xlsx":
+        path = path / f"trend_summary_{report_quarter}.xlsx"
+
+    result = export_trend_summary_if_changed(path, data, dry_run=dry_run)
+    logger.info(
+        "Trend summary export",
+        extra={
+            "status": result.status,
+            "path": str(result.path) if result.path else None,
+            "report_quarter": report_quarter,
+            "content_fingerprint": result.content_fingerprint,
+        },
+    )
+    if result.status == "written":
+        print(f"Exported trend summary to {result.path}")
+
+
 def main() -> int:
     configure_logging()
     logger = logging.getLogger(__name__)
@@ -827,6 +1008,16 @@ def _main(logger: logging.Logger) -> int:
         action="store_true",
         help="Include latest completed quarter into backfill run.",
     )
+    parser.add_argument(
+        "--export-xlsx",
+        action="store_true",
+        help="Export trend summary tables to an Excel file after computation.",
+    )
+    parser.add_argument(
+        "--export-xlsx-path",
+        default="data/exports",
+        help="Directory or file path for --export-xlsx output (default: data/exports).",
+    )
     args = parser.parse_args()
     show_trends_only_flag = bool(getattr(args, "show_trends_only", False))
     send_trend_summary_from_db_flag = bool(getattr(args, "send_trend_summary_from_db", False))
@@ -899,6 +1090,8 @@ def _main(logger: logging.Logger) -> int:
     ):
         logger.error("Backfill options require --backfill-trend-history")
         return 2
+    export_xlsx_flag = bool(getattr(args, "export_xlsx", False))
+    export_xlsx_path = getattr(args, "export_xlsx_path", "data/exports")
 
     try:
         config = load_config(notify_initial=args.notify_on_first_start)
@@ -1163,6 +1356,23 @@ def _main(logger: logging.Logger) -> int:
             view=trends_view,
             explain=trends_explain,
         )
+
+    if export_xlsx_flag:
+        export_quarter = trend_result.report_quarter or runtime.store.get_latest_trend_quarter()
+        if export_quarter:
+            _maybe_export_trend_summary(
+                runtime.store,
+                export_quarter,
+                export_xlsx_path=export_xlsx_path,
+                min_conf=args.trends_min_conf,
+                limit=args.trends_limit,
+                show_reversals=args.trends_show_reversals,
+                symbols_file=args.trends_symbols_file,
+                manager_ciks=manager_ciks,
+                view=trends_view,
+                dry_run=args.dry_run,
+                logger=logger,
+            )
 
     notify_if_all_reports_published_for_current_quarter(
         managers,

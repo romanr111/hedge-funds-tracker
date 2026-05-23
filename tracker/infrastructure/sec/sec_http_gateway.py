@@ -109,6 +109,61 @@ class SecClient:
         except requests.RequestException as exc:
             raise SubmissionsFetchError(f"Failed to fetch submissions for CIK {cik}: {exc}") from exc
 
+    def get_all_submissions(self, cik: str) -> dict[str, Any]:
+        """Fetch main submissions file plus all older paginated files."""
+        main = self.get_submissions(cik)
+        files_meta = main.get("filings", {}).get("files", [])
+        if not isinstance(files_meta, list) or not files_meta:
+            return main
+
+        # Merge older files into the recent array
+        merged_recent: dict[str, list[Any]] = {
+            key: list(main.get("filings", {}).get("recent", {}).get(key, []))
+            for key in [
+                "accessionNumber",
+                "filingDate",
+                "reportDate",
+                "acceptanceDateTime",
+                "act",
+                "form",
+                "fileNumber",
+                "filmNumber",
+                "items",
+                "core_type",
+                "size",
+                "isXBRL",
+                "isInlineXBRL",
+                "isXBRLNumeric",
+                "primaryDocument",
+                "primaryDocDescription",
+            ]
+        }
+
+        for file_info in files_meta:
+            if not isinstance(file_info, dict):
+                continue
+            file_name = file_info.get("name")
+            if not isinstance(file_name, str) or not file_name:
+                continue
+            file_url = f"https://data.sec.gov/submissions/{file_name}"
+            try:
+                data = self._get_json(file_url)
+            except requests.RequestException:
+                continue
+            # Older files have a flat structure (arrays at root), not filings.recent
+            if "filings" in data and isinstance(data.get("filings"), dict):
+                older = data["filings"].get("recent", {})
+            else:
+                older = data
+            for key in merged_recent:
+                older_values = older.get(key, [])
+                if isinstance(older_values, list):
+                    merged_recent[key].extend(older_values)
+
+        # Update main dict with merged arrays
+        main.setdefault("filings", {})["recent"] = merged_recent
+        return main
+
     def get_filing_index(self, cik: str, accession: str) -> list[FilingIndexEntry]:
         accession_dir = accession_no_dashes(accession)
         index_url = urljoin(EDGAR_ARCHIVES_BASE, f"{cik_dir(cik)}/{accession_dir}/index.json")
