@@ -173,6 +173,38 @@ def _section_rows(output: str, title: str) -> list[str]:
     return rows
 
 
+def _option_signal(idx: int, *, put_call: str, trend: float) -> TrendStockSignal:
+    now_iso = datetime.now(timezone.utc).isoformat()
+    prefix = "CALL" if put_call == "CALL" else "PUT"
+    return TrendStockSignal(
+        report_quarter="2025Q4",
+        instrument_key=f"{prefix}{idx:06d}|{put_call}",
+        cusip=f"{prefix}{idx:06d}",
+        put_call=put_call,
+        issuer_name=f"{prefix.title()} Corp {idx}",
+        title="OPTION",
+        np_raw=trend,
+        np_adj=trend,
+        impulse_score=trend,
+        accumulation_score=trend,
+        confidence=0.80,
+        trend_ewma=trend,
+        trend_delta=trend,
+        breadth_buy_weight=0.20 if trend > 0 else 0.01,
+        breadth_sell_weight=0.01 if trend > 0 else 0.20,
+        buy_managers=3 if trend > 0 else 0,
+        sell_managers=0 if trend > 0 else 3,
+        crowding_hhi=0.20,
+        persistence_buy=2 if trend > 0 else 0,
+        persistence_sell=0 if trend > 0 else 2,
+        regime="STRONG_BUY" if trend > 0 else "STRONG_SELL",
+        contributors_json=json.dumps([{"manager_name": "Fund A", "signal_value": trend}], separators=(",", ":")),
+        computed_at=now_iso,
+        freshness_multiplier=1.0,
+        freshness_ok=None,
+    )
+
+
 def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
     db_path = tmp_path / "tracker.sqlite3"
     symbols_path = tmp_path / "symbols.json"
@@ -223,6 +255,42 @@ def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
     assert "delta" not in result.stdout
     assert "impulse" not in result.stdout
     assert "Conviction / Target" not in result.stdout
+
+
+def test_show_trends_prints_capped_option_sections(tmp_path: Path) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text("{}")
+    _seed_trend_signals(db_path)
+    store = StateStore(db_path)
+    try:
+        store.replace_trend_option_signals(
+            "2025Q4",
+            [
+                *[_option_signal(idx, put_call="CALL", trend=0.10 - (idx * 0.001)) for idx in range(6)],
+                *[_option_signal(idx, put_call="PUT", trend=-0.10 + (idx * 0.001)) for idx in range(6)],
+            ],
+        )
+    finally:
+        store.close()
+
+    result = _run_show_trends(
+        "--db",
+        str(db_path),
+        "--quarter",
+        "2025Q4",
+        "--symbols-file",
+        str(symbols_path),
+    )
+
+    assert result.returncode == 0
+    assert "Top Call Option Trends" in result.stdout
+    assert "Top Put Option Trends" in result.stdout
+    assert "Flow" in result.stdout
+    assert "Adding" in result.stdout
+    assert "Reducing" in result.stdout
+    assert len(_section_rows(result.stdout, "Top Call Option Trends")) == 5
+    assert len(_section_rows(result.stdout, "Top Put Option Trends")) == 5
 
 
 def test_show_trends_raw_view_preserves_diagnostic_table(tmp_path: Path) -> None:

@@ -14,9 +14,11 @@ from tracker.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 WINDOW_QUARTERS = 4
-TREND_ENGINE_VERSION = "v1.4"
+TREND_ENGINE_VERSION = "v1.5"
 COMPUTE_MODE_LATEST = "latest"
 COMPUTE_MODE_BACKFILL = "backfill"
+OPTION_SIGNAL_LIMIT_PER_TYPE = 5
+OPTION_TYPES = {"CALL", "PUT"}
 
 
 class _WeightedManagerLike(Protocol):
@@ -35,6 +37,117 @@ class TrendEngineResult:
 def _fingerprint(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _normalize_put_call(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().upper()
+    return normalized if normalized in OPTION_TYPES else None
+
+
+def _positive_int(value: object) -> int | None:
+    return value if isinstance(value, int) and value > 0 else None
+
+
+def _option_rank(position: dict[str, object]) -> tuple[int, int, str]:
+    volume = _positive_int(position.get("shares"))
+    value = _positive_int(position.get("value")) or 0
+    rank_value = volume if volume is not None else value
+    return (rank_value, value, str(position.get("cusip") or ""))
+
+
+def _select_top_option_positions(
+    positions: list[dict[str, object]],
+    *,
+    per_type_limit: int = OPTION_SIGNAL_LIMIT_PER_TYPE,
+) -> list[dict[str, object]]:
+    grouped: dict[str, list[dict[str, object]]] = {"CALL": [], "PUT": []}
+    for position in positions:
+        put_call = _normalize_put_call(position.get("put_call"))
+        if put_call is None:
+            continue
+        normalized = dict(position)
+        normalized["put_call"] = put_call
+        grouped[put_call].append(normalized)
+
+    selected: list[dict[str, object]] = []
+    for put_call in ("CALL", "PUT"):
+        ranked = sorted(grouped[put_call], key=_option_rank, reverse=True)
+        selected.extend(ranked[:per_type_limit])
+    return selected
+
+
+def _option_snapshots(snapshots: list[ManagerQuarterSnapshot]) -> list[ManagerQuarterSnapshot]:
+    option_rows: list[ManagerQuarterSnapshot] = []
+    for snapshot in snapshots:
+        positions = _select_top_option_positions(snapshot.positions)
+        aum_value_k = sum(
+            value
+            for position in positions
+            for value in [position.get("value")]
+            if isinstance(value, int) and value > 0
+        )
+        option_rows.append(
+            ManagerQuarterSnapshot(
+                cik=snapshot.cik,
+                manager_name=snapshot.manager_name,
+                report_quarter=snapshot.report_quarter,
+                report_date=snapshot.report_date,
+                filing_date=snapshot.filing_date,
+                acceptance_datetime=snapshot.acceptance_datetime,
+                accession=snapshot.accession,
+                source_form=snapshot.source_form,
+                positions=positions,
+                aum_value_k=aum_value_k,
+                positions_count=len(positions),
+                updated_at=snapshot.updated_at,
+            )
+        )
+    return option_rows
+
+
+def _has_option_positions(snapshots: list[ManagerQuarterSnapshot]) -> bool:
+    return any(_select_top_option_positions(snapshot.positions) for snapshot in snapshots)
+
+
+def _row_to_signal(
+    row: TrendSignalRow,
+    *,
+    report_quarter: str,
+    computed_at: str,
+    is_backfill: bool,
+    backfill_batch_id: str | None,
+) -> TrendStockSignal:
+    return TrendStockSignal(
+        report_quarter=report_quarter,
+        instrument_key=row.instrument_key,
+        cusip=row.cusip,
+        put_call=row.put_call,
+        issuer_name=row.issuer_name,
+        title=row.title,
+        np_raw=row.np_raw,
+        np_adj=row.np_adj,
+        impulse_score=row.impulse_score,
+        accumulation_score=row.accumulation_score,
+        confidence=row.confidence,
+        trend_ewma=row.trend_ewma,
+        trend_delta=row.trend_delta,
+        breadth_buy_weight=row.breadth_buy_weight,
+        breadth_sell_weight=row.breadth_sell_weight,
+        buy_managers=row.buy_managers,
+        sell_managers=row.sell_managers,
+        crowding_hhi=row.crowding_hhi,
+        persistence_buy=row.persistence_buy,
+        persistence_sell=row.persistence_sell,
+        regime=row.regime,
+        contributors_json=json.dumps(row.contributors, separators=(",", ":"), ensure_ascii=True),
+        computed_at=computed_at,
+        freshness_multiplier=row.freshness_multiplier,
+        freshness_ok=row.freshness_ok,
+        is_backfill=is_backfill,
+        backfill_batch_id=backfill_batch_id,
+    )
 
 
 
@@ -164,9 +277,6 @@ def run_trend_engine_for_target_quarter(
     if compute_mode not in {COMPUTE_MODE_LATEST, COMPUTE_MODE_BACKFILL}:
         raise ValueError("compute_mode must be 'latest' or 'backfill'.")
 
-    if skip_if_exists and store.has_trend_signals_for_quarter(target_quarter):
-        return TrendEngineResult(status="skipped_existing_quarter", report_quarter=target_quarter, signals_count=0)
-
     ciks = [manager.cik for manager in managers]
     common_quarters = store.list_common_report_quarters(ciks)
     common_quarters = sorted(common_quarters, key=quarter_sort_key)
@@ -184,6 +294,13 @@ def run_trend_engine_for_target_quarter(
 
     snapshots = store.list_snapshots_for_quarters(quarter_window, ciks)
     snapshots_by_quarter = _build_snapshot_index(snapshots)
+    option_rows_expected = _has_option_positions(snapshots)
+    if (
+        skip_if_exists
+        and store.has_trend_signals_for_quarter(target_quarter)
+        and (not option_rows_expected or store.has_trend_option_signals_for_quarter(target_quarter))
+    ):
+        return TrendEngineResult(status="skipped_existing_quarter", report_quarter=target_quarter, signals_count=0)
 
     for quarter in quarter_window:
         for manager in managers:
@@ -210,8 +327,9 @@ def run_trend_engine_for_target_quarter(
     previous_run = store.get_trend_run(target_quarter)
     now_iso = datetime.now(timezone.utc).isoformat()
     is_backfill = compute_mode == COMPUTE_MODE_BACKFILL
+    option_rows_missing = option_rows_expected and not store.has_trend_option_signals_for_quarter(target_quarter)
 
-    if not force_recompute and previous_run and previous_run.input_fingerprint == input_fingerprint:
+    if not force_recompute and not option_rows_missing and previous_run and previous_run.input_fingerprint == input_fingerprint:
         latest_trend_run_quarter = store.get_latest_trend_run_quarter()
         status = (
             "skipped_no_new_completed_quarter"
@@ -236,11 +354,23 @@ def run_trend_engine_for_target_quarter(
         blend_mode=blend_mode,
         latest_prices=resolved_latest_prices,
     )
+    stock_rows = [row for row in computed.signals if row.put_call is None]
+    option_computed = compute_trend_signals(
+        quarters=quarter_window,
+        snapshots_by_quarter=_build_snapshot_index(_option_snapshots(snapshots)),
+        manager_weights=manager_weights,
+        blend_mode=blend_mode,
+        latest_prices=None,
+    )
 
-    top_payload = _build_top_fingerprint_payload(computed.signals)
+    top_payload = {
+        "stock": _build_top_fingerprint_payload(stock_rows),
+        "options": _build_top_fingerprint_payload(option_computed.signals),
+    }
     top_fingerprint = _fingerprint(top_payload)
     if (
         not force_recompute
+        and not option_rows_missing
         and resolved_latest_prices is None
         and previous_run
         and previous_run.top_fingerprint == top_fingerprint
@@ -262,38 +392,27 @@ def run_trend_engine_for_target_quarter(
         return TrendEngineResult(status="skipped_no_top_change", report_quarter=target_quarter, signals_count=0)
 
     rows_to_store = [
-        TrendStockSignal(
+        _row_to_signal(
+            row,
             report_quarter=target_quarter,
-            instrument_key=row.instrument_key,
-            cusip=row.cusip,
-            put_call=row.put_call,
-            issuer_name=row.issuer_name,
-            title=row.title,
-            np_raw=row.np_raw,
-            np_adj=row.np_adj,
-            impulse_score=row.impulse_score,
-            accumulation_score=row.accumulation_score,
-            confidence=row.confidence,
-            trend_ewma=row.trend_ewma,
-            trend_delta=row.trend_delta,
-            breadth_buy_weight=row.breadth_buy_weight,
-            breadth_sell_weight=row.breadth_sell_weight,
-            buy_managers=row.buy_managers,
-            sell_managers=row.sell_managers,
-            crowding_hhi=row.crowding_hhi,
-            persistence_buy=row.persistence_buy,
-            persistence_sell=row.persistence_sell,
-            regime=row.regime,
-            contributors_json=json.dumps(row.contributors, separators=(",", ":"), ensure_ascii=True),
             computed_at=now_iso,
-            freshness_multiplier=row.freshness_multiplier,
-            freshness_ok=row.freshness_ok,
             is_backfill=is_backfill,
             backfill_batch_id=backfill_batch_id,
         )
-        for row in computed.signals
+        for row in stock_rows
+    ]
+    option_rows_to_store = [
+        _row_to_signal(
+            row,
+            report_quarter=target_quarter,
+            computed_at=now_iso,
+            is_backfill=is_backfill,
+            backfill_batch_id=backfill_batch_id,
+        )
+        for row in option_computed.signals
     ]
     store.replace_trend_stock_signals(target_quarter, rows_to_store)
+    store.replace_trend_option_signals(target_quarter, option_rows_to_store)
     store.upsert_trend_run(
         report_quarter=target_quarter,
         input_fingerprint=input_fingerprint,
@@ -314,11 +433,16 @@ def run_trend_engine_for_target_quarter(
         extra={
             "report_quarter": target_quarter,
             "signals_count": len(rows_to_store),
+            "option_signals_count": len(option_rows_to_store),
             "compute_mode": compute_mode,
             "backfill_batch_id": backfill_batch_id,
         },
     )
-    return TrendEngineResult(status="computed", report_quarter=target_quarter, signals_count=len(rows_to_store))
+    return TrendEngineResult(
+        status="computed",
+        report_quarter=target_quarter,
+        signals_count=len(rows_to_store) + len(option_rows_to_store),
+    )
 
 
 

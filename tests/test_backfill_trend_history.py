@@ -31,6 +31,17 @@ def _positions(alpha_value: int, beta_value: int) -> list[dict[str, object]]:
     ]
 
 
+def _option_position(cusip: str, put_call: str, value: int, shares: int) -> dict[str, object]:
+    return {
+        "name": f"Option {cusip}",
+        "title": "OPTION",
+        "cusip": cusip,
+        "put_call": put_call,
+        "value": value,
+        "shares": shares,
+    }
+
+
 
 def _quarter_dates(quarter: str) -> tuple[str, str, str]:
     parsed = parse_report_quarter(quarter)
@@ -204,6 +215,66 @@ def test_backfill_skip_existing_without_force(tmp_path: Path) -> None:
         assert result.computed == 0
         assert result.skipped_existing == 1
         assert result.details[0].status == "skipped_existing_quarter"
+    finally:
+        store.close()
+
+
+def test_backfill_computes_missing_option_rows_when_stock_rows_exist(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        quarters = _quarters(2024, 1, 4)
+        for quarter_idx, quarter in enumerate(quarters, start=1):
+            positions = _positions(100 + quarter_idx * 10, 900 - quarter_idx * 10)
+            positions.append(_option_position("111111111", "CALL", 50 + quarter_idx * 10, 5 + quarter_idx))
+            _seed_snapshot(
+                store,
+                cik="0000000001",
+                name="Fund A",
+                quarter=quarter,
+                accession=f"a-{quarter}",
+                positions=positions,
+            )
+            _seed_snapshot(
+                store,
+                cik="0000000002",
+                name="Fund B",
+                quarter=quarter,
+                accession=f"b-{quarter}",
+                positions=_positions(200, 800),
+            )
+        managers = [
+            ManagerConfig(name="Fund A", cik="0000000001", weight=1.0),
+            ManagerConfig(name="Fund B", cik="0000000002", weight=1.0),
+        ]
+        seeded = run_trend_engine_for_target_quarter(
+            managers,
+            store,
+            target_quarter="2024Q3",
+            dry_run=False,
+            compute_mode="backfill",
+            backfill_batch_id="batch-seeded",
+        )
+        assert seeded.status == "computed"
+        assert store.has_trend_signals_for_quarter("2024Q3")
+        assert store.has_trend_option_signals_for_quarter("2024Q3")
+
+        store.replace_trend_option_signals("2024Q3", [])
+
+        result = run_backfill_trend_history(
+            managers,
+            store,
+            dry_run=False,
+            from_quarter="2024Q3",
+            to_quarter="2024Q3",
+            include_latest=True,
+            force_recompute=False,
+        )
+
+        assert result.status == "completed"
+        assert result.computed == 1
+        assert result.skipped_existing == 0
+        assert result.details[0].status == "computed"
+        assert store.list_trend_option_signals("2024Q3")
     finally:
         store.close()
 

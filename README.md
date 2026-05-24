@@ -117,6 +117,14 @@ The second section is reduction pressure from reported long holdings, not a
 short-position signal. The default CLI output also prints the portfolio value
 and shares direction breakdown for the compared quarters.
 
+When 13F filings include reported option positions, the same trend engine also
+prints separate call and put option tables in CLI/script/XLSX output. For each
+fund and quarter, the option universe is capped to the top five CALL and top
+five PUT positions by reported `sshPrnamt` volume, falling back to reported
+value when volume is missing. These rows show fund-position flow in reported
+13F options only; they are not live options-chain, strike, expiry, Greek, or
+pricing signals.
+
 DB-only trend commands:
 ```bash
 python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4
@@ -218,7 +226,8 @@ Flag reference:
   `--trends-explain`, `--trends-show-reversals`, `--trends-symbols-file`.
 - `--trends-view shortlist|raw`
   `shortlist` is default. `raw` prints the broad diagnostic buy/sell/reversal
-  tables; both views print the portfolio value and shares breakdown.
+  tables; both views print the option trend tables plus the portfolio value and
+  shares breakdown.
 - `--trends-explain SYMBOL_OR_INSTRUMENT`
   Resolves a mapped ticker, CUSIP, or instrument key and explains selector
   state, score ingredients, support, freshness, crowding, and stored top contributors.

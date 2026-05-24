@@ -48,6 +48,7 @@ from tracker.infrastructure.market import StooqPriceGateway
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
+OPTIONS_OUTPUT_MAX_ROWS = 5
 PORTFOLIO_VALUE_HOLD_BAND = 0.05
 PORTFOLIO_SHARES_HOLD_BAND = 0.05
 
@@ -138,6 +139,26 @@ def _instrument_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
     identifier = str(signal.instrument_key or signal.cusip or "UNKNOWN").strip().upper()
     issuer = str(signal.issuer_name or "Unknown issuer").strip()
     return f"{issuer} [unmapped: {identifier}]"
+
+
+def _option_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
+    put_call = str(signal.put_call or "").strip().upper()
+    ticker = _ticker_for_signal(signal, symbol_map)
+    identifiers = {
+        str(signal.instrument_key or "").strip().upper(),
+        str(signal.cusip or "").strip().upper(),
+    }
+    if ticker in identifiers:
+        ticker = _instrument_for_signal(signal, symbol_map)
+    return f"{ticker} {put_call}".strip()
+
+
+def _is_option_signal(signal: Any) -> bool:
+    return bool(str(getattr(signal, "put_call", "") or "").strip())
+
+
+def _stock_only_signals(signals: list[Any]) -> list[Any]:
+    return [item for item in signals if not _is_option_signal(item)]
 
 
 def _action_for_signal(signal: Any) -> str:
@@ -429,13 +450,14 @@ def _build_trend_summary_workbook_data(
     show_reversals: bool = False,
 ) -> TrendSummaryWorkbookData:
     effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
+    stock_signals = _stock_only_signals(signals)
 
     if view == "raw":
         sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
         buy = sorted(
             [
                 item
-                for item in signals
+                for item in stock_signals
                 if (
                     "BUY" in item.regime
                     and item.regime != "REVERSAL_SELL"
@@ -447,11 +469,19 @@ def _build_trend_summary_workbook_data(
             reverse=True,
         )[:effective_limit]
         sell = sorted(
-            [item for item in signals if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf],
+            [
+                item
+                for item in stock_signals
+                if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
+            ],
             key=lambda item: item.trend_ewma,
         )[:effective_limit]
         reversals = sorted(
-            [item for item in signals if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= min_conf],
+            [
+                item
+                for item in stock_signals
+                if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= min_conf
+            ],
             key=lambda item: abs(item.trend_delta),
             reverse=True,
         )[:effective_limit]
@@ -475,7 +505,7 @@ def _build_trend_summary_workbook_data(
         if show_reversals and reversals:
             rev_table = TrendTable(title="Reversals", headers=headers, rows=[_raw_row(item) for item in reversals])
     else:
-        selection = select_trend_ideas(signals, min_conf=min_conf, limit=limit)
+        selection = select_trend_ideas(stock_signals, min_conf=min_conf, limit=limit)
         headers = ["Instrument", "Setup", "Idea Score", "Support", "Confidence", "Freshness", "Top Contributors"]
         top_buy = TrendTable(
             title="Top Buy Ideas",
@@ -489,6 +519,7 @@ def _build_trend_summary_workbook_data(
         )
         rev_table = None
 
+    call_options, put_options = _option_tables(store.list_trend_option_signals(report_quarter), symbol_map)
     summary = _compute_portfolio_value_trend_summary(store, report_quarter, manager_ciks or [])
 
     fingerprint_payload = {
@@ -499,6 +530,8 @@ def _build_trend_summary_workbook_data(
         "top_buy": top_buy.rows,
         "top_sell": top_sell.rows,
         "reversals": rev_table.rows if rev_table else None,
+        "call_options": call_options.rows,
+        "put_options": put_options.rows,
         "portfolio_summary": summary.__dict__ if summary else None,
     }
     content_fingerprint = hashlib.sha256(
@@ -535,6 +568,8 @@ def _build_trend_summary_workbook_data(
         top_buy=top_buy,
         top_sell=top_sell,
         reversals=rev_table,
+        call_options=call_options,
+        put_options=put_options,
         portfolio_value_trend=portfolio_data,
         content_fingerprint=content_fingerprint,
     )
@@ -552,6 +587,51 @@ def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> l
         _freshness_text(signal),
         directional_contributor_names(signal.contributors_json, direction),
     ]
+
+
+def _option_flow_for_signal(signal: Any) -> str:
+    return "Adding" if float(signal.trend_ewma) >= 0 else "Reducing"
+
+
+def _option_row(signal: Any, symbol_map: dict[str, str]) -> list[str]:
+    direction = "BUY" if float(signal.trend_ewma) >= 0 else "REDUCTION"
+    return [
+        _option_for_signal(signal, symbol_map),
+        _option_flow_for_signal(signal),
+        _setup_for_signal(signal),
+        f"{abs(float(signal.trend_ewma)) * float(signal.confidence):.4f}",
+        f"{signal.buy_managers}/{signal.sell_managers}",
+        f"{round(float(signal.confidence) * 100)}%",
+        directional_contributor_names(signal.contributors_json, direction),
+    ]
+
+
+def _select_option_signals(signals: list[Any], put_call: str, *, limit: int = OPTIONS_OUTPUT_MAX_ROWS) -> list[Any]:
+    normalized = put_call.strip().upper()
+    return sorted(
+        [item for item in signals if str(item.put_call or "").strip().upper() == normalized],
+        key=lambda item: (
+            -(abs(float(item.trend_ewma)) * float(item.confidence)),
+            -abs(float(item.trend_ewma)),
+            str(item.instrument_key),
+        ),
+    )[: max(1, min(limit, OPTIONS_OUTPUT_MAX_ROWS))]
+
+
+def _option_tables(option_signals: list[Any], symbol_map: dict[str, str]) -> tuple[TrendTable, TrendTable]:
+    headers = ["Option", "Flow", "Setup", "Idea Score", "Support", "Confidence", "Top Contributors"]
+    calls = _select_option_signals(option_signals, "CALL")
+    puts = _select_option_signals(option_signals, "PUT")
+    return (
+        TrendTable(title="Top Call Option Trends", headers=headers, rows=[_option_row(item, symbol_map) for item in calls]),
+        TrendTable(title="Top Put Option Trends", headers=headers, rows=[_option_row(item, symbol_map) for item in puts]),
+    )
+
+
+def _print_option_trend_sections(option_signals: list[Any], symbol_map: dict[str, str]) -> None:
+    call_table, put_table = _option_tables(option_signals, symbol_map)
+    _print_section(call_table.title, call_table.headers, call_table.rows)
+    _print_section(put_table.title, put_table.headers, put_table.rows)
 
 
 def _print_shortlist_trend_table(
@@ -584,6 +664,7 @@ def _print_shortlist_trend_table(
         headers,
         [_shortlist_row(item, symbol_map) for item in selection.promoted_reduction],
     )
+    _print_option_trend_sections(store.list_trend_option_signals(report_quarter), symbol_map)
     _print_portfolio_value_trend_summary(store, report_quarter, manager_ciks=manager_ciks)
 
 
@@ -667,7 +748,9 @@ def _print_raw_trend_table(
 ) -> None:
     symbol_map = _load_symbol_map(Path(symbols_file))
     signals = store.list_trend_stock_signals(report_quarter)
-    if not signals:
+    option_signals = store.list_trend_option_signals(report_quarter)
+    signals = _stock_only_signals(signals)
+    if not signals and not option_signals:
         print(f"No trend signals found for {report_quarter}.")
         return
 
@@ -733,6 +816,7 @@ def _print_raw_trend_table(
 
     _print_section("Top Buy Trends", headers, [_row(item) for item in buy])
     _print_section("Top Sell Trends", headers, [_row(item) for item in sell])
+    _print_option_trend_sections(option_signals, symbol_map)
     _print_portfolio_value_trend_summary(
         store,
         report_quarter,
@@ -756,7 +840,9 @@ def _print_detailed_trend_table(
 ) -> None:
     symbol_map = _load_symbol_map(Path(symbols_file))
     signals = store.list_trend_stock_signals(report_quarter)
-    if not signals:
+    option_signals = store.list_trend_option_signals(report_quarter)
+    signals = _stock_only_signals(signals)
+    if not signals and not option_signals:
         print(f"No trend signals found for {report_quarter}.")
         return
     if explain:
@@ -861,7 +947,8 @@ def _maybe_export_trend_summary(
 ) -> None:
     symbol_map = _load_symbol_map(Path(symbols_file))
     signals = store.list_trend_stock_signals(report_quarter)
-    if not signals:
+    option_signals = store.list_trend_option_signals(report_quarter)
+    if not signals and not option_signals:
         logger.info("No trend signals to export", extra={"report_quarter": report_quarter})
         return
 

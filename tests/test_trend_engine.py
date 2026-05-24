@@ -45,6 +45,24 @@ def _positions(alpha_value: int, beta_value: int) -> list[dict[str, object]]:
     ]
 
 
+def _option_position(
+    *,
+    name: str,
+    cusip: str,
+    put_call: str,
+    value: int,
+    shares: int | None,
+) -> dict[str, object]:
+    return {
+        "name": name,
+        "title": "OPTION",
+        "cusip": cusip,
+        "put_call": put_call,
+        "value": value,
+        "shares": shares,
+    }
+
+
 def _seed_snapshot(
     store: StateStore,
     *,
@@ -158,6 +176,112 @@ def test_run_trend_engine_computes_and_persists_signals(tmp_path: Path) -> None:
         assert alpha.impulse_score != 0
         assert alpha.accumulation_score != 0
         assert 0 <= alpha.confidence <= 1
+    finally:
+        store.close()
+
+
+def test_run_trend_engine_persists_capped_option_signals_separately(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(1000, 9000),
+        )
+        q4_positions = _positions(2000, 8000)
+        q4_positions.extend(
+            [
+                _option_position(
+                    name=f"Call {idx}",
+                    cusip=f"CALL0000{idx}",
+                    put_call="Call",
+                    value=6_000 + idx,
+                    shares=idx,
+                )
+                for idx in range(1, 7)
+            ]
+        )
+        q4_positions.extend(
+            [
+                _option_position(
+                    name=f"Put {idx}",
+                    cusip=f"PUT00000{idx}",
+                    put_call="put",
+                    value=5_000 + idx,
+                    shares=idx,
+                )
+                for idx in range(1, 6)
+            ]
+        )
+        q4_positions.append(
+            _option_position(name="Put Fallback", cusip="PUTFALLBK", put_call="PUT", value=10_000, shares=None)
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=q4_positions,
+        )
+        managers = [ManagerConfig(name="Fund A", cik="0000000001", weight=1.0)]
+
+        result = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+
+        assert result.status == "computed"
+        stock_signals = store.list_trend_stock_signals("2025Q4")
+        option_signals = store.list_trend_option_signals("2025Q4")
+        assert all(item.put_call is None for item in stock_signals)
+        assert len([item for item in option_signals if item.put_call == "CALL"]) == 5
+        assert len([item for item in option_signals if item.put_call == "PUT"]) == 5
+        assert {item.instrument_key for item in option_signals if item.put_call == "CALL"} == {
+            "CALL00002|CALL",
+            "CALL00003|CALL",
+            "CALL00004|CALL",
+            "CALL00005|CALL",
+            "CALL00006|CALL",
+        }
+        assert "PUTFALLBK|PUT" in {item.instrument_key for item in option_signals}
+    finally:
+        store.close()
+
+
+def test_run_trend_engine_recomputes_when_option_rows_missing_but_input_unchanged(tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "tracker.sqlite3")
+    try:
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q3",
+            accession="a-q3",
+            positions=_positions(1000, 9000),
+        )
+        _seed_snapshot(
+            store,
+            cik="0000000001",
+            name="Fund A",
+            quarter="2025Q4",
+            accession="a-q4",
+            positions=[
+                *_positions(2000, 8000),
+                _option_position(name="Alpha Call", cusip="111111111", put_call="Call", value=500, shares=50),
+            ],
+        )
+        managers = [ManagerConfig(name="Fund A", cik="0000000001", weight=1.0)]
+
+        first = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+        assert first.status == "computed"
+        assert store.list_trend_option_signals("2025Q4")
+
+        store.replace_trend_option_signals("2025Q4", [])
+        second = run_trend_engine_for_latest_completed_quarter(managers, store, dry_run=False)
+
+        assert second.status == "computed"
+        assert store.list_trend_option_signals("2025Q4")
     finally:
         store.close()
 

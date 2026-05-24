@@ -78,6 +78,33 @@ def test_write_trend_summary_workbook_creates_expected_sheets(tmp_path: Path) ->
     assert "Metadata" in sheet_names
 
 
+def test_write_trend_summary_workbook_creates_option_sheets_when_present(tmp_path: Path) -> None:
+    path = tmp_path / "trend_summary.xlsx"
+    data = TrendSummaryWorkbookData(
+        report_quarter="2025Q4",
+        view_mode="shortlist",
+        min_conf=0.45,
+        limit=8,
+        top_buy=TrendTable(title="Top Buy Ideas", headers=["Instrument"], rows=[["AAPL"]]),
+        top_sell=TrendTable(title="Top Reduction Trends", headers=["Instrument"], rows=[]),
+        reversals=None,
+        portfolio_value_trend=None,
+        content_fingerprint="with-options",
+        call_options=TrendTable(title="Top Call Option Trends", headers=["Option", "Flow"], rows=[["AAPL CALL", "Adding"]]),
+        put_options=TrendTable(title="Top Put Option Trends", headers=["Option", "Flow"], rows=[["TSLA PUT", "Reducing"]]),
+    )
+
+    write_trend_summary_workbook(path, data)
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(str(path))
+    assert "Call Option Trends" in workbook.sheetnames
+    assert "Put Option Trends" in workbook.sheetnames
+    assert workbook["Call Option Trends"].cell(row=4, column=1).value == "AAPL CALL"
+    assert workbook["Put Option Trends"].cell(row=4, column=2).value == "Reducing"
+
+
 def test_metadata_sheet_contains_fingerprint(tmp_path: Path) -> None:
     path = tmp_path / "trend_summary.xlsx"
     data = _sample_workbook_data()

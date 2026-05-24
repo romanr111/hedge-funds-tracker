@@ -39,6 +39,7 @@ except ModuleNotFoundError as exc:
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
 IDEAS_OUTPUT_MAX_ROWS = 8
+OPTIONS_OUTPUT_MAX_ROWS = 5
 
 
 def _format_table(headers: list[str], rows: list[list[str]]) -> str:
@@ -99,6 +100,26 @@ def _instrument_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
     return f"{issuer} [unmapped: {identifier}]"
 
 
+def _option_for_signal(signal: Any, symbol_map: dict[str, str]) -> str:
+    put_call = str(signal.put_call or "").strip().upper()
+    ticker = _ticker_for_signal(signal, symbol_map)
+    identifiers = {
+        str(signal.instrument_key or "").strip().upper(),
+        str(signal.cusip or "").strip().upper(),
+    }
+    if ticker in identifiers:
+        ticker = _instrument_for_signal(signal, symbol_map)
+    return f"{ticker} {put_call}".strip()
+
+
+def _is_option_signal(signal: Any) -> bool:
+    return bool(str(getattr(signal, "put_call", "") or "").strip())
+
+
+def _stock_only_signals(signals: list[Any]) -> list[Any]:
+    return [item for item in signals if not _is_option_signal(item)]
+
+
 def _print_section(title: str, headers: list[str], rows: list[list[str]]) -> None:
     print()
     print(title)
@@ -149,6 +170,43 @@ def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> l
     ]
 
 
+def _option_flow_for_signal(signal: Any) -> str:
+    return "Adding" if float(signal.trend_ewma) >= 0 else "Reducing"
+
+
+def _option_row(signal: Any, symbol_map: dict[str, str]) -> list[str]:
+    direction = "BUY" if float(signal.trend_ewma) >= 0 else "REDUCTION"
+    return [
+        _option_for_signal(signal, symbol_map),
+        _option_flow_for_signal(signal),
+        _setup_for_signal(signal),
+        f"{abs(float(signal.trend_ewma)) * float(signal.confidence):.4f}",
+        f"{signal.buy_managers}/{signal.sell_managers}",
+        f"{round(float(signal.confidence) * 100)}%",
+        directional_contributor_names(signal.contributors_json, direction),
+    ]
+
+
+def _select_option_signals(signals: list[Any], put_call: str) -> list[Any]:
+    normalized = put_call.strip().upper()
+    return sorted(
+        [item for item in signals if str(item.put_call or "").strip().upper() == normalized],
+        key=lambda item: (
+            -(abs(float(item.trend_ewma)) * float(item.confidence)),
+            -abs(float(item.trend_ewma)),
+            str(item.instrument_key),
+        ),
+    )[:OPTIONS_OUTPUT_MAX_ROWS]
+
+
+def _print_option_trend_sections(option_signals: list[Any], symbol_map: dict[str, str]) -> None:
+    headers = ["Option", "Flow", "Setup", "Idea Score", "Support", "Confidence", "Top Contributors"]
+    calls = _select_option_signals(option_signals, "CALL")
+    puts = _select_option_signals(option_signals, "PUT")
+    _print_section("Top Call Option Trends", headers, [_option_row(item, symbol_map) for item in calls])
+    _print_section("Top Put Option Trends", headers, [_option_row(item, symbol_map) for item in puts])
+
+
 def _print_shortlist(
     *,
     quarter: str,
@@ -156,6 +214,7 @@ def _print_shortlist(
     symbol_map: dict[str, str],
     min_conf: float,
     limit: int,
+    option_signals: list[Any],
 ) -> None:
     selection = select_trend_ideas(signals, min_conf=min_conf, limit=limit)
     print(f"Report quarter: {quarter}")
@@ -176,6 +235,7 @@ def _print_shortlist(
         headers,
         [_shortlist_row(item, symbol_map) for item in selection.promoted_reduction],
     )
+    _print_option_trend_sections(option_signals, symbol_map)
 
 
 def _print_raw_trends(
@@ -186,6 +246,7 @@ def _print_raw_trends(
     min_conf: float,
     limit: int,
     show_reversals: bool,
+    option_signals: list[Any],
 ) -> None:
     effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
     buy = sorted(
@@ -246,6 +307,7 @@ def _print_raw_trends(
 
     _print_section("Top Buy Trends", headers, [_row(item) for item in buy])
     _print_section("Top Sell Trends", headers, [_row(item) for item in sell])
+    _print_option_trend_sections(option_signals, symbol_map)
     if show_reversals:
         _print_section("Reversals", headers, [_row(item) for item in reversals])
 
@@ -299,9 +361,11 @@ def main() -> int:
             return 0
 
         signals = store.list_trend_stock_signals(quarter)
-        if not signals:
+        option_signals = store.list_trend_option_signals(quarter)
+        if not signals and not option_signals:
             print(f"No trend signals found for {quarter}.")
             return 0
+        signals = _stock_only_signals(signals)
 
         if args.view == "raw":
             _print_raw_trends(
@@ -311,6 +375,7 @@ def main() -> int:
                 min_conf=args.min_conf,
                 limit=args.limit,
                 show_reversals=args.show_reversals,
+                option_signals=option_signals,
             )
         else:
             _print_shortlist(
@@ -319,6 +384,7 @@ def main() -> int:
                 symbol_map=symbol_map,
                 min_conf=args.min_conf,
                 limit=max(1, min(args.limit, IDEAS_OUTPUT_MAX_ROWS)),
+                option_signals=option_signals,
             )
         return 0
     finally:

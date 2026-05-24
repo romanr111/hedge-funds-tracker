@@ -160,11 +160,6 @@ def run_backfill_trend_history(
     failed = 0
 
     for quarter in quarters:
-        if not force_recompute and store.has_trend_signals_for_quarter(quarter):
-            details.append(BackfillQuarterResult(report_quarter=quarter, status="skipped_existing_quarter", signals_count=0))
-            skipped_existing += 1
-            continue
-
         result: TrendEngineResult = run_trend_engine_for_target_quarter(
             managers,
             store,

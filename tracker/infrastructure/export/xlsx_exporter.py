@@ -53,6 +53,8 @@ class TrendSummaryWorkbookData:
     reversals: TrendTable | None
     portfolio_value_trend: PortfolioValueTrendData | None
     content_fingerprint: str
+    call_options: TrendTable | None = None
+    put_options: TrendTable | None = None
 
 
 def _write_table_sheet(
@@ -295,6 +297,10 @@ def write_trend_summary_workbook(path: Path, data: TrendSummaryWorkbookData) -> 
     _write_table_sheet(workbook, "Top Reduction Trends", data.top_sell)
     if data.reversals is not None:
         _write_table_sheet(workbook, "Reversals", data.reversals)
+    if data.call_options is not None:
+        _write_table_sheet(workbook, "Call Option Trends", data.call_options)
+    if data.put_options is not None:
+        _write_table_sheet(workbook, "Put Option Trends", data.put_options)
     if data.portfolio_value_trend is not None:
         _write_portfolio_value_trend_sheet(workbook, data.portfolio_value_trend)
     _write_metadata_sheet(workbook, data)

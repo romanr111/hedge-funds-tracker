@@ -254,6 +254,67 @@ def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
     assert "Shares Direction Breakdown" in captured.out
 
 
+def test_print_shortlist_trend_table_includes_option_sections(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    db_path = tmp_path / "tracker.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA"}')
+    _seed_trend_and_snapshot_data(db_path)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    store = StateStore(db_path)
+    try:
+        store.replace_trend_option_signals(
+            "2025Q4",
+            [
+                TrendStockSignal(
+                    report_quarter="2025Q4",
+                    instrument_key="111111111|CALL",
+                    cusip="111111111",
+                    put_call="CALL",
+                    issuer_name="Alpha Corp",
+                    title="OPTION",
+                    np_raw=0.08,
+                    np_adj=0.08,
+                    impulse_score=0.08,
+                    accumulation_score=0.07,
+                    confidence=0.80,
+                    trend_ewma=0.07,
+                    trend_delta=0.02,
+                    breadth_buy_weight=0.20,
+                    breadth_sell_weight=0.01,
+                    buy_managers=3,
+                    sell_managers=0,
+                    crowding_hhi=0.20,
+                    persistence_buy=2,
+                    persistence_sell=0,
+                    regime="STRONG_BUY",
+                    contributors_json=json.dumps([{"manager_name": "Fund 1", "signal_value": 0.08}], separators=(",", ":")),
+                    computed_at=now_iso,
+                    freshness_multiplier=1.0,
+                    freshness_ok=None,
+                )
+            ],
+        )
+        cli_main_module._print_detailed_trend_table(
+            store,
+            "2025Q4",
+            min_conf=0.5,
+            limit=8,
+            show_reversals=False,
+            symbols_file=str(symbols_path),
+            manager_ciks=["0000000001", "0000000002", "0000000003", "0000000004"],
+        )
+    finally:
+        store.close()
+
+    captured = capsys.readouterr()
+    assert "Top Call Option Trends" in captured.out
+    assert "AAA CALL" in captured.out
+    assert "Adding" in captured.out
+    assert "Top Put Option Trends" in captured.out
+
+
 def test_print_trend_explanation_resolves_mapped_symbol(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
