@@ -388,6 +388,35 @@ def test_trend_tables_and_clear_state(tmp_path: Path) -> None:
         store.close()
 
 
+def test_get_latest_trend_quarter_with_multiple_quarters_returns_max(tmp_path: Path) -> None:
+    """Regression guard: ensure DESC ordering works when multiple quarters exist."""
+    store = StateStore(tmp_path / "multi-quarter.sqlite3")
+    try:
+        # Insert quarters out of chronological order
+        store.replace_trend_stock_signals("2022Q2", [_seed_signal("2022Q2", "A")])
+        store.replace_trend_stock_signals("2024Q4", [_seed_signal("2024Q4", "B")])
+        store.replace_trend_stock_signals("2023Q1", [_seed_signal("2023Q1", "C")])
+        store.replace_trend_stock_signals("2026Q1", [_seed_signal("2026Q1", "D")])
+
+        assert store.get_latest_trend_quarter() == "2026Q1"
+    finally:
+        store.close()
+
+
+def test_list_trend_quarters_returns_ascending_order(tmp_path: Path) -> None:
+    """Ensure quarters are returned oldest-first (chronological order)."""
+    store = StateStore(tmp_path / "list-quarters.sqlite3")
+    try:
+        store.replace_trend_stock_signals("2022Q2", [_seed_signal("2022Q2", "A")])
+        store.replace_trend_stock_signals("2025Q4", [_seed_signal("2025Q4", "B")])
+        store.replace_trend_stock_signals("2024Q1", [_seed_signal("2024Q1", "C")])
+
+        quarters = store.list_trend_quarters()
+        assert quarters == ["2022Q2", "2024Q1", "2025Q4"]
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize(
     "caller",
     [

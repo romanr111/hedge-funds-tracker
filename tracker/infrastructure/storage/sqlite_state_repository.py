@@ -733,7 +733,6 @@ class StateStore:
                     UNION
                     SELECT report_quarter FROM trend_option_signal
                 )
-                GROUP BY report_quarter
                 ORDER BY report_quarter ASC
                 """
             ).fetchall()
