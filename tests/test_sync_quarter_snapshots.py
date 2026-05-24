@@ -45,6 +45,9 @@ class _Client:
             }
         }
 
+    def get_all_submissions(self, cik: str) -> dict[str, Any]:
+        return self.get_submissions(cik)
+
     def find_information_table_url(self, cik: str, accession: str) -> str:
         del cik
         self.url_calls.append(accession)
@@ -101,6 +104,9 @@ class _ClientWithOldFiling:
                 }
             }
         }
+
+    def get_all_submissions(self, cik: str) -> dict[str, Any]:
+        return self.get_submissions(cik)
 
     def find_information_table_url(self, cik: str, accession: str) -> str:
         del cik
