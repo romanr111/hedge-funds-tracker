@@ -117,42 +117,79 @@ class StateStore:
         )
         self._conn.execute(
             """
+            CREATE TABLE IF NOT EXISTS trend_option_signal (
+                report_quarter TEXT NOT NULL,
+                instrument_key TEXT NOT NULL,
+                cusip TEXT,
+                put_call TEXT,
+                issuer_name TEXT,
+                title TEXT,
+                np_raw REAL NOT NULL,
+                np_adj REAL NOT NULL,
+                impulse_score REAL NOT NULL,
+                accumulation_score REAL NOT NULL,
+                confidence REAL NOT NULL,
+                trend_ewma REAL NOT NULL,
+                trend_delta REAL NOT NULL,
+                breadth_buy_weight REAL NOT NULL,
+                breadth_sell_weight REAL NOT NULL,
+                buy_managers INTEGER NOT NULL,
+                sell_managers INTEGER NOT NULL,
+                crowding_hhi REAL NOT NULL,
+                persistence_buy INTEGER NOT NULL,
+                persistence_sell INTEGER NOT NULL,
+                regime TEXT NOT NULL,
+                contributors_json TEXT NOT NULL,
+                computed_at TEXT NOT NULL,
+                freshness_multiplier REAL NOT NULL DEFAULT 1.0,
+                freshness_ok INTEGER,
+                is_backfill INTEGER NOT NULL DEFAULT 0,
+                backfill_batch_id TEXT,
+                PRIMARY KEY (report_quarter, instrument_key)
+            )
+            """
+        )
+        self._conn.execute(
+            """
             CREATE INDEX IF NOT EXISTS idx_trend_stock_signal_quarter_regime
             ON trend_stock_signal(report_quarter, regime)
             """
         )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_trend_option_signal_quarter_regime
+            ON trend_option_signal(report_quarter, regime)
+            """
+        )
         self._ensure_trend_run_columns()
         self._ensure_trend_stock_signal_columns()
+        self._ensure_trend_option_signal_columns()
 
     def _column_exists(self, table_name: str, column_name: str) -> bool:
         rows = self._conn.execute(f"PRAGMA table_info({table_name})").fetchall()
         return any(row["name"] == column_name for row in rows)
 
+    def _ensure_trend_signal_columns(self, table_name: str) -> None:
+        if not self._column_exists(table_name, "impulse_score"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN impulse_score REAL NOT NULL DEFAULT 0.0")
+        if not self._column_exists(table_name, "accumulation_score"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN accumulation_score REAL NOT NULL DEFAULT 0.0")
+        if not self._column_exists(table_name, "confidence"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0")
+        if not self._column_exists(table_name, "freshness_multiplier"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN freshness_multiplier REAL NOT NULL DEFAULT 1.0")
+        if not self._column_exists(table_name, "freshness_ok"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN freshness_ok INTEGER")
+        if not self._column_exists(table_name, "is_backfill"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN is_backfill INTEGER NOT NULL DEFAULT 0")
+        if not self._column_exists(table_name, "backfill_batch_id"):
+            self._conn.execute(f"ALTER TABLE {table_name} ADD COLUMN backfill_batch_id TEXT")
+
     def _ensure_trend_stock_signal_columns(self) -> None:
-        if not self._column_exists("trend_stock_signal", "impulse_score"):
-            self._conn.execute(
-                "ALTER TABLE trend_stock_signal ADD COLUMN impulse_score REAL NOT NULL DEFAULT 0.0"
-            )
-        if not self._column_exists("trend_stock_signal", "accumulation_score"):
-            self._conn.execute(
-                "ALTER TABLE trend_stock_signal ADD COLUMN accumulation_score REAL NOT NULL DEFAULT 0.0"
-            )
-        if not self._column_exists("trend_stock_signal", "confidence"):
-            self._conn.execute(
-                "ALTER TABLE trend_stock_signal ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0"
-            )
-        if not self._column_exists("trend_stock_signal", "freshness_multiplier"):
-            self._conn.execute(
-                "ALTER TABLE trend_stock_signal ADD COLUMN freshness_multiplier REAL NOT NULL DEFAULT 1.0"
-            )
-        if not self._column_exists("trend_stock_signal", "freshness_ok"):
-            self._conn.execute("ALTER TABLE trend_stock_signal ADD COLUMN freshness_ok INTEGER")
-        if not self._column_exists("trend_stock_signal", "is_backfill"):
-            self._conn.execute(
-                "ALTER TABLE trend_stock_signal ADD COLUMN is_backfill INTEGER NOT NULL DEFAULT 0"
-            )
-        if not self._column_exists("trend_stock_signal", "backfill_batch_id"):
-            self._conn.execute("ALTER TABLE trend_stock_signal ADD COLUMN backfill_batch_id TEXT")
+        self._ensure_trend_signal_columns("trend_stock_signal")
+
+    def _ensure_trend_option_signal_columns(self) -> None:
+        self._ensure_trend_signal_columns("trend_option_signal")
 
     def _ensure_trend_run_columns(self) -> None:
         if not self._column_exists("trend_run", "is_backfill"):
@@ -534,13 +571,13 @@ class StateStore:
         except sqlite3.Error as exc:
             raise StateStoreError(f"Failed to upsert trend run for quarter {report_quarter}: {exc}") from exc
 
-    def replace_trend_stock_signals(self, report_quarter: str, signals: list[TrendStockSignal]) -> None:
+    def _replace_trend_signals(self, table_name: str, report_quarter: str, signals: list[TrendStockSignal]) -> None:
         try:
-            self._conn.execute("DELETE FROM trend_stock_signal WHERE report_quarter = ?", (report_quarter,))
+            self._conn.execute(f"DELETE FROM {table_name} WHERE report_quarter = ?", (report_quarter,))
             if signals:
                 self._conn.executemany(
-                    """
-                    INSERT INTO trend_stock_signal (
+                    f"""
+                    INSERT INTO {table_name} (
                         report_quarter, instrument_key, cusip, put_call, issuer_name, title,
                         np_raw, np_adj, impulse_score, accumulation_score, confidence, trend_ewma, trend_delta,
                         breadth_buy_weight, breadth_sell_weight, buy_managers, sell_managers,
@@ -584,12 +621,18 @@ class StateStore:
                 )
             self._conn.commit()
         except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to replace trend stock signals for quarter {report_quarter}: {exc}") from exc
+            raise StateStoreError(f"Failed to replace {table_name} rows for quarter {report_quarter}: {exc}") from exc
 
-    def list_trend_stock_signals(self, report_quarter: str) -> list[TrendStockSignal]:
+    def replace_trend_stock_signals(self, report_quarter: str, signals: list[TrendStockSignal]) -> None:
+        self._replace_trend_signals("trend_stock_signal", report_quarter, signals)
+
+    def replace_trend_option_signals(self, report_quarter: str, signals: list[TrendStockSignal]) -> None:
+        self._replace_trend_signals("trend_option_signal", report_quarter, signals)
+
+    def _list_trend_signals(self, table_name: str, report_quarter: str) -> list[TrendStockSignal]:
         try:
             rows = self._conn.execute(
-                """
+                f"""
                 SELECT
                     report_quarter, instrument_key, cusip, put_call, issuer_name, title,
                     np_raw, np_adj, impulse_score, accumulation_score, confidence, trend_ewma, trend_delta,
@@ -597,7 +640,7 @@ class StateStore:
                     crowding_hhi, persistence_buy, persistence_sell, regime,
                     contributors_json, computed_at, freshness_multiplier, freshness_ok,
                     is_backfill, backfill_batch_id
-                FROM trend_stock_signal
+                FROM {table_name}
                 WHERE report_quarter = ?
                 ORDER BY trend_ewma DESC
                 """,
@@ -636,15 +679,24 @@ class StateStore:
                 for row in rows
             ]
         except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to list trend stock signals for quarter {report_quarter}: {exc}") from exc
+            raise StateStoreError(f"Failed to list {table_name} rows for quarter {report_quarter}: {exc}") from exc
+
+    def list_trend_stock_signals(self, report_quarter: str) -> list[TrendStockSignal]:
+        return self._list_trend_signals("trend_stock_signal", report_quarter)
+
+    def list_trend_option_signals(self, report_quarter: str) -> list[TrendStockSignal]:
+        return self._list_trend_signals("trend_option_signal", report_quarter)
 
     def get_latest_trend_quarter(self) -> str | None:
         try:
             row = self._conn.execute(
                 """
                 SELECT report_quarter
-                FROM trend_stock_signal
-                GROUP BY report_quarter
+                FROM (
+                    SELECT report_quarter FROM trend_stock_signal
+                    UNION
+                    SELECT report_quarter FROM trend_option_signal
+                )
                 ORDER BY report_quarter DESC
                 LIMIT 1
                 """
@@ -676,7 +728,11 @@ class StateStore:
             rows = self._conn.execute(
                 """
                 SELECT report_quarter
-                FROM trend_stock_signal
+                FROM (
+                    SELECT report_quarter FROM trend_stock_signal
+                    UNION
+                    SELECT report_quarter FROM trend_option_signal
+                )
                 GROUP BY report_quarter
                 ORDER BY report_quarter ASC
                 """
@@ -686,11 +742,17 @@ class StateStore:
             raise StateStoreError(f"Failed to list trend quarters: {exc}") from exc
 
     def has_trend_signals_for_quarter(self, report_quarter: str) -> bool:
+        return self._has_trend_rows_for_quarter("trend_stock_signal", report_quarter)
+
+    def has_trend_option_signals_for_quarter(self, report_quarter: str) -> bool:
+        return self._has_trend_rows_for_quarter("trend_option_signal", report_quarter)
+
+    def _has_trend_rows_for_quarter(self, table_name: str, report_quarter: str) -> bool:
         try:
             row = self._conn.execute(
-                """
+                f"""
                 SELECT 1
-                FROM trend_stock_signal
+                FROM {table_name}
                 WHERE report_quarter = ?
                 LIMIT 1
                 """,
@@ -698,7 +760,7 @@ class StateStore:
             ).fetchone()
             return row is not None
         except sqlite3.Error as exc:
-            raise StateStoreError(f"Failed to check trend signals existence for quarter {report_quarter}: {exc}") from exc
+            raise StateStoreError(f"Failed to check {table_name} existence for quarter {report_quarter}: {exc}") from exc
 
     def clear_state(self) -> int:
         try:
@@ -706,12 +768,14 @@ class StateStore:
             cursor_snapshot = self._conn.execute("DELETE FROM manager_quarter_snapshot")
             cursor_trend_run = self._conn.execute("DELETE FROM trend_run")
             cursor_trend_signal = self._conn.execute("DELETE FROM trend_stock_signal")
+            cursor_option_signal = self._conn.execute("DELETE FROM trend_option_signal")
             self._conn.commit()
             return (
                 cursor_state.rowcount
                 + cursor_snapshot.rowcount
                 + cursor_trend_run.rowcount
                 + cursor_trend_signal.rowcount
+                + cursor_option_signal.rowcount
             )
         except sqlite3.Error as exc:
             raise StateStoreError(f"Failed to clear state store at {self._db_path}: {exc}") from exc
