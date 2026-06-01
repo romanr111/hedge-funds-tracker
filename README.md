@@ -129,26 +129,6 @@ pricing signals.
 - **CALL options** give the holder the right to BUY the underlying asset at a specified price. In this context, increasing CALL positions generally indicate bullish sentiment (expecting price increase), while decreasing CALL positions may indicate reducing bullish bets or taking profits.
 - **PUT options** give the holder the right to SELL the underlying asset at a specified price. Increasing PUT positions generally indicate bearish sentiment (expecting price decrease), while decreasing PUT positions may indicate reducing bearish bets.
 
-**Sample Option Trends Output:**
-
-Top Call Option Trends
-Option                                     | Flow     | Setup    | Idea Score | Support | Confidence | Top Contributors         
--------------------------------------------+----------+----------+------------+---------+------------+--------------------------
-RSP CALL                                   | Adding   | Reversal | 0.0437     | 1/0     | 81%        | [Duquesne Family Office] 
-INTC CALL                                  | Reducing | Reversal | 0.0345     | 0/1     | 81%        | [Situational Awareness]  
-CRM CALL                                   | Adding   | Reversal | 0.0324     | 1/0     | 80%        | [Akre Capital Management]
-Ishares Tr [unmapped: 464287655|CALL] CALL | Reducing | Unknown  | 0.0096     | 0/1     | 65%        | [Duquesne Family Office] 
-MU CALL                                    | Reducing | Reversal | 0.0082     | 1/1     | 57%        | [✅ Appaloosa]            
-
-Top Put Option Trends
-Option                                         | Flow   | Setup    | Idea Score | Support | Confidence | Top Contributors       
------------------------------------------------+--------+----------+------------+---------+------------+------------------------
-VANECK ETF TRUST [unmapped: 92189F676|PUT] PUT | Adding | Reversal | 0.0183     | 1/0     | 77%        | [Situational Awareness]
-ORCL PUT                                       | Adding | Reversal | 0.0177     | 1/0     | 76%        | [Situational Awareness]
-NVDA PUT                                       | Adding | Reversal | 0.0167     | 1/0     | 76%        | [Situational Awareness]
-AMD PUT                                        | Adding | Reversal | 0.0160     | 1/0     | 75%        | [Situational Awareness]
-INTC PUT                                       | Adding | Reversal | 0.0006     | 1/0     | 59%        | [Situational Awareness]
-
 DB-only trend commands:
 ```bash
 python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4
