@@ -3,12 +3,12 @@ from __future__ import annotations
 import pytest
 import requests
 
-from tracker.domain.exceptions import (
+from signals.domain.exceptions import (
     InformationTableLookupError,
     InformationTableNotFoundError,
     SubmissionsFetchError,
 )
-from tracker.infrastructure.sec.sec_http_gateway import (
+from signals.infrastructure.sec.sec_http_gateway import (
     FilingIndexEntry,
     SecClient,
     accession_no_dashes,
@@ -69,8 +69,8 @@ def test_throttle_sleeps_when_elapsed_below_interval(monkeypatch: pytest.MonkeyP
     client = SecClient(user_agent="test-agent", min_interval_seconds=0.5)
     client._last_request_time = 10.0
 
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.time", lambda: 10.2)
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.time", lambda: 10.2)
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
 
     client._throttle()
     assert sleeps == [pytest.approx(0.3)]
@@ -87,8 +87,8 @@ def test_request_retries_on_retryable_http_and_succeeds(
         _DummyResponse(status_code=200, json_payload={"ok": True}),
     ]
     _patch_request_sequence(monkeypatch, client, events)
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.time", lambda: 100.0)
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.time", lambda: 100.0)
 
     response = client._request("GET", "https://example.com")
     assert response.status_code == 200
@@ -103,8 +103,8 @@ def test_request_retries_after_request_exception(monkeypatch: pytest.MonkeyPatch
         _DummyResponse(status_code=200, json_payload={"ok": True}),
     ]
     _patch_request_sequence(monkeypatch, client, events)
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.time", lambda: 100.0)
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.sleep", lambda value: sleeps.append(value))
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.time", lambda: 100.0)
 
     response = client._request("GET", "https://example.com")
     assert response.status_code == 200
@@ -118,7 +118,7 @@ def test_request_raises_last_error_when_retries_exhausted(monkeypatch: pytest.Mo
         requests.Timeout("timeout-2"),
     ]
     _patch_request_sequence(monkeypatch, client, events)
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.sleep", lambda *_: None)
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.sleep", lambda *_: None)
 
     with pytest.raises(requests.Timeout, match="timeout-2"):
         client._request("GET", "https://example.com", max_retries=2)
@@ -130,7 +130,7 @@ def test_request_raises_for_last_response_when_all_attempts_http_error(
     client = SecClient(user_agent="test-agent")
     events: list[_DummyResponse | Exception] = [_DummyResponse(status_code=500), _DummyResponse(status_code=500)]
     _patch_request_sequence(monkeypatch, client, events)
-    monkeypatch.setattr("tracker.infrastructure.sec.sec_http_gateway.time.sleep", lambda *_: None)
+    monkeypatch.setattr("signals.infrastructure.sec.sec_http_gateway.time.sleep", lambda *_: None)
 
     with pytest.raises(requests.HTTPError, match="http status 500"):
         client._request("GET", "https://example.com", max_retries=2)

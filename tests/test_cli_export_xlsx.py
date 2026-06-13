@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from tracker.domain.models import TrendStockSignal
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.models import TrendStockSignal
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
-cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
+cli_main_module = importlib.import_module("signals.interfaces.cli.main")
 
 
 def _seed_trend_data(db_path: Path) -> None:
@@ -116,7 +116,7 @@ def _seed_option_trend_data(db_path: Path) -> None:
 
 
 def test_build_trend_summary_workbook_data_returns_expected_structure(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_data(db_path)
     store = StateStore(db_path)
     try:
@@ -147,7 +147,7 @@ def test_build_trend_summary_workbook_data_returns_expected_structure(tmp_path: 
 
 
 def test_build_trend_summary_workbook_data_includes_option_tables(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_data(db_path)
     _seed_option_trend_data(db_path)
     store = StateStore(db_path)
@@ -176,7 +176,7 @@ def test_build_trend_summary_workbook_data_includes_option_tables(tmp_path: Path
 
 
 def test_build_trend_summary_workbook_data_raw_view(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_data(db_path)
     store = StateStore(db_path)
     try:
@@ -201,7 +201,7 @@ def test_build_trend_summary_workbook_data_raw_view(tmp_path: Path) -> None:
 
 
 def test_build_trend_summary_workbook_data_fingerprint_changes_with_view(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_data(db_path)
     store = StateStore(db_path)
     try:
@@ -235,7 +235,7 @@ def test_build_trend_summary_workbook_data_fingerprint_changes_with_view(tmp_pat
 
 
 def test_maybe_export_trend_summary_writes_file(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_data(db_path)
     store = StateStore(db_path)
     export_path = tmp_path / "exports"
@@ -262,7 +262,7 @@ def test_maybe_export_trend_summary_writes_file(tmp_path: Path, caplog: pytest.L
 
 
 def test_maybe_export_trend_summary_writes_option_only_file(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_option_trend_data(db_path)
     store = StateStore(db_path)
     export_path = tmp_path / "exports"

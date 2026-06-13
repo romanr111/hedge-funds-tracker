@@ -8,8 +8,8 @@ import sys
 from typing import Any
 
 try:
-    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
-    from tracker.domain.trend_presentation import (
+    from signals.infrastructure.storage.sqlite_state_repository import StateStore
+    from signals.domain.trend_presentation import (
         action_for_signal,
         conviction_target,
         directional_contributor_names,
@@ -17,16 +17,16 @@ try:
         setup_for_regime,
         target_confidence_for_regime,
     )
-    from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
+    from signals.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 except ModuleNotFoundError as exc:
-    if exc.name != "tracker":
+    if exc.name != "signals":
         raise
     # Keep script execution stable in CI where the repository root may be absent from sys.path.
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
-    from tracker.domain.trend_presentation import (
+    from signals.infrastructure.storage.sqlite_state_repository import StateStore
+    from signals.domain.trend_presentation import (
         action_for_signal,
         conviction_target,
         directional_contributor_names,
@@ -34,7 +34,7 @@ except ModuleNotFoundError as exc:
         setup_for_regime,
         target_confidence_for_regime,
     )
-    from tracker.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
+    from signals.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 
 SELL_TABLE_MIN_CONF = 0.35
 BUY_TABLE_MIN_TREND = 0.001
@@ -314,7 +314,7 @@ def _print_raw_trends(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Print trend signals by quarter.")
-    parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB (default: data/tracker.sqlite3)")
+    parser.add_argument("--db", default="data/signals.sqlite3", help="Path to SQLite DB (default: data/signals.sqlite3)")
     parser.add_argument("--quarter", help="Report quarter in format YYYYQn (example: 2025Q4).")
     parser.add_argument("--limit", type=int, default=IDEAS_OUTPUT_MAX_ROWS, help="Max rows per section (default: 8, max: 8).")
     parser.add_argument(

@@ -8,10 +8,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from tracker.application.use_cases.run_trend_engine import TrendEngineResult
-from tracker.config import AppConfig, ManagerConfig
+from signals.application.use_cases.run_trend_engine import TrendEngineResult
+from signals.config import AppConfig, ManagerConfig
 
-cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
+cli_main_module = importlib.import_module("signals.interfaces.cli.main")
 
 
 def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,7 +50,7 @@ def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPat
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),

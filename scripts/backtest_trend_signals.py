@@ -9,10 +9,10 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
-from tracker.domain.trend_ideas import TrendIdeaState, select_trend_ideas
-from tracker.domain.trend_telegram_message import load_symbol_map
-from tracker.infrastructure.market.yfinance_history_gateway import YFinanceHistoryGateway
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.trend_ideas import TrendIdeaState, select_trend_ideas
+from signals.domain.trend_telegram_message import load_symbol_map
+from signals.infrastructure.market.yfinance_history_gateway import YFinanceHistoryGateway
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 FORWARD_WINDOWS = (30, 90, 180)
@@ -200,7 +200,7 @@ def _format_result(r: BacktestResult) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backtest trend signals against forward returns.")
-    parser.add_argument("--db", default="data/tracker.sqlite3", help="SQLite DB path.")
+    parser.add_argument("--db", default="data/signals.sqlite3", help="SQLite DB path.")
     parser.add_argument("--symbols-file", default="config/cusip_tickers.json", help="Symbol map JSON.")
     parser.add_argument("--quarters", nargs="+", help="Specific quarters to test. Default: all.")
     parser.add_argument("--min-conf", type=float, default=0.45)

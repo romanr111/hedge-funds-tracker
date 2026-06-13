@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
-from tracker.domain.models import Manager
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
+from signals.domain.models import Manager
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _info_table_xml(values: list[tuple[str, int]]) -> str:
@@ -62,7 +62,7 @@ class _Client:
 
 
 def test_sync_quarter_snapshots_selects_latest_and_aggregates_duplicates(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         manager = Manager(name="Fund A", cik="0000000001")
         client = _Client()
@@ -121,7 +121,7 @@ class _ClientWithOldFiling:
 
 
 def test_sync_quarter_snapshots_applies_filing_age_filter(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         manager = Manager(name="Fund A", cik="0000000001")
         client = _ClientWithOldFiling()

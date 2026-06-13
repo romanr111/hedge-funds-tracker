@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from io import StringIO
 
-from tracker.infrastructure.logging.json_logger import JsonFormatter, configure_logging
+from signals.infrastructure.logging.json_logger import JsonFormatter, configure_logging
 
 
 def test_configure_logging_normalizes_existing_root_handler() -> None:

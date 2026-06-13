@@ -4,16 +4,16 @@ from pathlib import Path
 
 import pytest
 
-import tracker.domain.trends as trends_module
-from tracker.application.use_cases.run_trend_engine import (
+import signals.domain.trends as trends_module
+from signals.application.use_cases.run_trend_engine import (
     _build_top_fingerprint_payload,
     detect_latest_completed_report_quarter,
     run_trend_engine_for_latest_completed_quarter,
     run_trend_engine_for_target_quarter,
 )
-from tracker.config import ManagerConfig
-from tracker.domain.models import ManagerQuarterSnapshot
-from tracker.domain.trends import (
+from signals.config import ManagerConfig
+from signals.domain.models import ManagerQuarterSnapshot
+from signals.domain.trends import (
     TrendSignalRow,
     _confidence_score,
     _entry_impulse_multiplier,
@@ -21,7 +21,7 @@ from tracker.domain.trends import (
     _trade_flow_delta,
     compute_trend_signals,
 )
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _positions(alpha_value: int, beta_value: int) -> list[dict[str, object]]:
@@ -87,7 +87,7 @@ def _seed_snapshot(
 
 
 def test_detect_latest_completed_report_quarter_uses_intersection(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -124,7 +124,7 @@ def test_detect_latest_completed_report_quarter_uses_intersection(tmp_path: Path
 
 
 def test_run_trend_engine_computes_and_persists_signals(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -181,7 +181,7 @@ def test_run_trend_engine_computes_and_persists_signals(tmp_path: Path) -> None:
 
 
 def test_run_trend_engine_persists_capped_option_signals_separately(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -250,7 +250,7 @@ def test_run_trend_engine_persists_capped_option_signals_separately(tmp_path: Pa
 
 
 def test_run_trend_engine_recomputes_when_option_rows_missing_but_input_unchanged(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -287,7 +287,7 @@ def test_run_trend_engine_recomputes_when_option_rows_missing_but_input_unchange
 
 
 def test_run_trend_engine_skips_writing_signals_when_top_unchanged(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -350,7 +350,7 @@ def test_run_trend_engine_skips_writing_signals_when_top_unchanged(tmp_path: Pat
 
 
 def test_run_trend_engine_recomputes_with_latest_prices_even_when_top_unchanged(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -413,7 +413,7 @@ def test_run_trend_engine_recomputes_with_latest_prices_even_when_top_unchanged(
 
 
 def test_run_trend_engine_skips_when_input_unchanged_after_reupsert(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -471,7 +471,7 @@ def test_run_trend_engine_skips_when_input_unchanged_after_reupsert(tmp_path: Pa
 
 
 def test_run_trend_engine_force_recompute_bypasses_unchanged_input_skip(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -529,7 +529,7 @@ def test_run_trend_engine_force_recompute_bypasses_unchanged_input_skip(tmp_path
 
 
 def test_run_trend_engine_recomputes_when_manager_weight_changes(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         # Fund A: bullish Alpha, bearish Beta
         _seed_snapshot(
@@ -595,7 +595,7 @@ def test_run_trend_engine_recomputes_when_manager_weight_changes(tmp_path: Path)
 
 
 def test_run_trend_engine_for_target_quarter_marks_backfill_metadata(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,
@@ -658,7 +658,7 @@ def test_run_trend_engine_for_target_quarter_marks_backfill_metadata(tmp_path: P
 
 
 def test_run_trend_engine_for_target_quarter_skip_if_exists(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,

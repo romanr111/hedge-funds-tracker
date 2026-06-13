@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from tracker.infrastructure.market.stooq_history_gateway import StooqHistoryGateway
+from signals.infrastructure.market.stooq_history_gateway import StooqHistoryGateway
 
 
 class _FakeResponse:

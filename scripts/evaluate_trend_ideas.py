@@ -4,10 +4,10 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from tracker.application.use_cases.evaluate_trend_ideas import evaluate_trend_ideas
-from tracker.domain.trend_telegram_message import load_symbol_map
-from tracker.infrastructure.market import StooqHistoryGateway
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.application.use_cases.evaluate_trend_ideas import evaluate_trend_ideas
+from signals.domain.trend_telegram_message import load_symbol_map
+from signals.infrastructure.market import StooqHistoryGateway
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _format_coverage(label: str, coverage: object) -> list[str]:
@@ -22,7 +22,7 @@ def _format_coverage(label: str, coverage: object) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate promoted trend ideas against forward price coverage.")
-    parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB.")
+    parser.add_argument("--db", default="data/signals.sqlite3", help="Path to SQLite DB.")
     parser.add_argument("--quarters", nargs="+", help="Trend report quarters to evaluate. Default: all stored trend quarters.")
     parser.add_argument("--symbols-file", default="config/cusip_tickers.json", help="CUSIP/instrument key to ticker JSON map.")
     parser.add_argument("--benchmark", default="SPY", help="Benchmark ticker for relative-return coverage.")

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from tracker.domain.exceptions import InformationTableLookupError
-from tracker.sec_client import FilingIndexEntry, SecClient
+from signals.domain.exceptions import InformationTableLookupError
+from signals.sec_client import FilingIndexEntry, SecClient
 
 
 def test_find_information_table_skips_primary_doc_html(monkeypatch: pytest.MonkeyPatch) -> None:

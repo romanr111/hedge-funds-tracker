@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import tracker.config as config_module
+import signals.config as config_module
 
 
 def _clear_config_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,7 +112,7 @@ def test_load_managers_validates_json_and_file(tmp_path: Path) -> None:
 
 def test_load_config_reads_notifiers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_config_env(monkeypatch)
-    monkeypatch.setenv("SEC_USER_AGENT", "Tracker/1.0 (test@example.com)")
+    monkeypatch.setenv("SEC_USER_AGENT", "Signals/1.0 (test@example.com)")
     monkeypatch.setenv("SEC_RATE_LIMIT_PER_SEC", "4")
     monkeypatch.setenv("MAX_FILING_AGE_DAYS", "90")
     monkeypatch.setenv("MANAGERS_JSON", '[{"name":"Fund A","cik":"0000000001","weight":2}]')
@@ -121,7 +121,7 @@ def test_load_config_reads_notifiers(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "chat")
     resolved = config_module.load_config(db_path=str(tmp_path / "state.sqlite3"), notify_initial=True)
 
-    assert resolved.sec_user_agent.startswith("Tracker/1.0")
+    assert resolved.sec_user_agent.startswith("Signals/1.0")
     assert resolved.sec_rate_limit_per_sec == 4.0
     assert resolved.max_filing_age_days == 90
     assert resolved.db_path == tmp_path / "state.sqlite3"
@@ -150,7 +150,7 @@ def test_load_config_validates_invalid_environment(
     expected: str,
 ) -> None:
     _clear_config_env(monkeypatch)
-    monkeypatch.setenv("SEC_USER_AGENT", "Tracker/1.0 (test@example.com)")
+    monkeypatch.setenv("SEC_USER_AGENT", "Signals/1.0 (test@example.com)")
     monkeypatch.setenv("MANAGERS_JSON", '[{"name":"Fund A","cik":"0000000001","weight":1}]')
     monkeypatch.setenv(env_name, env_value)
 

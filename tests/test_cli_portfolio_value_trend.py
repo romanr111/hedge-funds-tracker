@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from tracker.domain.models import TrendStockSignal
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.models import TrendStockSignal
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
-cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
+cli_main_module = importlib.import_module("signals.interfaces.cli.main")
 
 
 def _sample_position(*, cusip: str, value: int, shares: int) -> list[dict[str, int | str]]:
@@ -145,7 +145,7 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
 
 
 def test_compute_portfolio_value_trend_summary_classifies_growth_hold_reduction(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_trend_and_snapshot_data(db_path)
 
     store = StateStore(db_path)
@@ -180,7 +180,7 @@ def test_compute_portfolio_value_trend_summary_classifies_growth_hold_reduction(
 def test_print_raw_trend_table_includes_portfolio_value_trend_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
     _seed_trend_and_snapshot_data(db_path)
@@ -203,7 +203,7 @@ def test_print_raw_trend_table_includes_portfolio_value_trend_summary(
     captured = capsys.readouterr()
     assert "Top Buy Trends" in captured.out
     assert "Top Sell Trends" in captured.out
-    assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
+    assert "Signals Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Managers analyzed: 3/4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
@@ -219,7 +219,7 @@ def test_print_raw_trend_table_includes_portfolio_value_trend_summary(
 def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
     _seed_trend_and_snapshot_data(db_path)
@@ -246,7 +246,7 @@ def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
     assert "[TCI, Coatue, ✅ Appaloosa]" in captured.out
     assert "Opposing Fund" not in captured.out
     assert "Multi-manager support" not in captured.out
-    assert "Hedge Funds Portfolio Value Trend (QoQ)" in captured.out
+    assert "Signals Portfolio Value Trend (QoQ)" in captured.out
     assert "Compared quarters: 2025Q3 -> 2025Q4" in captured.out
     assert "Aggregate portfolio value: $600B -> $577B (-3.8% Holding)" in captured.out
     assert "Aggregate portfolio shares: 6,000 -> 5,750 (-4.2% Holding)" in captured.out
@@ -257,7 +257,7 @@ def test_print_shortlist_trend_table_includes_portfolio_value_trend_summary(
 def test_print_shortlist_trend_table_includes_option_sections(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA"}')
     _seed_trend_and_snapshot_data(db_path)
@@ -318,7 +318,7 @@ def test_print_shortlist_trend_table_includes_option_sections(
 def test_print_trend_explanation_resolves_mapped_symbol(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA"}')
     _seed_trend_and_snapshot_data(db_path)

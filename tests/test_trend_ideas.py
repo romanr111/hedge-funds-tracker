@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from tracker.domain.models import TrendStockSignal
-from tracker.domain.trend_ideas import TrendIdeaState, select_trend_ideas
+from signals.domain.models import TrendStockSignal
+from signals.domain.trend_ideas import TrendIdeaState, select_trend_ideas
 
 
 def _signal(

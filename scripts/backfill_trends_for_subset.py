@@ -7,18 +7,18 @@ import json
 import logging
 from pathlib import Path
 
-from tracker.application.use_cases.run_trend_engine import (
+from signals.application.use_cases.run_trend_engine import (
     COMPUTE_MODE_BACKFILL,
     run_trend_engine_for_target_quarter,
 )
-from tracker.composition import build_runtime
-from tracker.config import load_config
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.composition import build_runtime
+from signals.config import load_config
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill trends for managers with sufficient history.")
-    parser.add_argument("--db", default="data/tracker.sqlite3", help="SQLite DB path.")
+    parser.add_argument("--db", default="data/signals.sqlite3", help="SQLite DB path.")
     parser.add_argument("--min-quarters", type=int, default=30, help="Min quarters required per manager.")
     args = parser.parse_args()
 

@@ -8,10 +8,10 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from tracker import config as _config  # noqa: F401  # loads .env into os.environ for optional integration check
-from tracker.domain.models import ManagerState, Position
-from tracker.main import _filter_by_filing_age, _format_local_datetime, process_manager
-from tracker.notifiers import build_notifiers
+from signals import config as _config  # noqa: F401  # loads .env into os.environ for optional integration check
+from signals.domain.models import ManagerState, Position
+from signals.main import _filter_by_filing_age, _format_local_datetime, process_manager
+from signals.notifiers import build_notifiers
 
 
 def _iso_days_ago(days_ago: int) -> str:
@@ -263,7 +263,7 @@ def test_initial_run_uses_only_latest_filing(monkeypatch: pytest.MonkeyPatch) ->
     def _fake_parse(_: str) -> list[Position]:
         return [{"cusip": "x"}]
 
-    monkeypatch.setattr("tracker.main.parse_infotable", _fake_parse)
+    monkeypatch.setattr("signals.main.parse_infotable", _fake_parse)
 
     process_manager(
         manager,
@@ -288,7 +288,7 @@ def test_initial_run_notification_has_spacing_and_no_filed_line(monkeypatch: pyt
     def _fake_parse(_: str) -> list[Position]:
         return [{"cusip": "x"}]
 
-    monkeypatch.setattr("tracker.main.parse_infotable", _fake_parse)
+    monkeypatch.setattr("signals.main.parse_infotable", _fake_parse)
 
     process_manager(
         manager,

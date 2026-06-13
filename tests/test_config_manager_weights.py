@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from tracker.config import load_managers
+from signals.config import load_managers
 
 
 def test_load_managers_requires_weight() -> None:

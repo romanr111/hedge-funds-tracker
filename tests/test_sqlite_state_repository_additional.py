@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from tracker.domain.exceptions import StateStoreError
-from tracker.domain.models import TrendStockSignal
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.exceptions import StateStoreError
+from signals.domain.models import TrendStockSignal
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _seed_signal(quarter: str = "2025Q1", key: str = "AAA") -> TrendStockSignal:
@@ -52,7 +52,7 @@ def test_state_store_wraps_sqlite_init_errors(monkeypatch: pytest.MonkeyPatch, t
     def fail_connect(*_args: object, **_kwargs: object) -> sqlite3.Connection:
         raise sqlite3.OperationalError("boom")
 
-    monkeypatch.setattr("tracker.infrastructure.storage.sqlite_state_repository.sqlite3.connect", fail_connect)
+    monkeypatch.setattr("signals.infrastructure.storage.sqlite_state_repository.sqlite3.connect", fail_connect)
 
     with pytest.raises(StateStoreError, match="Failed to initialize SQLite state store"):
         StateStore(tmp_path / "state.sqlite3")

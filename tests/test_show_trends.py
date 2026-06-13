@@ -6,8 +6,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tracker.domain.models import TrendStockSignal
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.models import TrendStockSignal
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _run_show_trends(*args: str) -> subprocess.CompletedProcess[str]:
@@ -206,7 +206,7 @@ def _option_signal(idx: int, *, put_call: str, trend: float) -> TrendStockSignal
 
 
 def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text(
         json.dumps(
@@ -258,7 +258,7 @@ def test_show_trends_defaults_to_long_term_shortlist(tmp_path: Path) -> None:
 
 
 def test_show_trends_prints_capped_option_sections(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text("{}")
     _seed_trend_signals(db_path)
@@ -294,7 +294,7 @@ def test_show_trends_prints_capped_option_sections(tmp_path: Path) -> None:
 
 
 def test_show_trends_raw_view_preserves_diagnostic_table(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB","333333333":"CCC","444444444":"DDD"}')
     _seed_trend_signals(db_path)
@@ -318,7 +318,7 @@ def test_show_trends_raw_view_preserves_diagnostic_table(tmp_path: Path) -> None
 
 
 def test_show_trends_caps_buy_and_sell_ideas_to_eight_rows(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     signals: list[TrendStockSignal] = []
     symbol_map: dict[str, str] = {}
@@ -415,7 +415,7 @@ def test_show_trends_caps_buy_and_sell_ideas_to_eight_rows(tmp_path: Path) -> No
 
 
 def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC", "444444444": "DDD"}, ensure_ascii=True))
     _seed_trend_signals(db_path)
@@ -450,7 +450,7 @@ def test_show_trends_supports_custom_min_conf_and_rejects_invalid(tmp_path: Path
 
 
 def test_show_trends_shows_freshness_indicator_column_when_available(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text(json.dumps({"111111111": "AAA", "333333333": "CCC", "444444444": "DDD"}, ensure_ascii=True))
     _seed_trend_signals(db_path, with_freshness=True)

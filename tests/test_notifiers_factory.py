@@ -4,7 +4,7 @@ from typing import Mapping
 
 import pytest
 
-from tracker.infrastructure.notify.notifiers import (
+from signals.infrastructure.notify.notifiers import (
     Notifier,
     NotifierBuildConfig,
     NotifierBuilder,

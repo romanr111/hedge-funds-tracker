@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-import tracker.domain.trends as trends_module
-from tracker.domain.models import ManagerQuarterSnapshot
+import signals.domain.trends as trends_module
+from signals.domain.models import ManagerQuarterSnapshot
 
 
 def _snapshot(cik: str, quarter: str, positions: list[dict[str, object]]) -> ManagerQuarterSnapshot:

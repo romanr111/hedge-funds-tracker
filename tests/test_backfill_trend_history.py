@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tracker.application.use_cases.backfill_trend_history import run_backfill_trend_history
-from tracker.application.use_cases.run_trend_engine import run_trend_engine_for_target_quarter
-from tracker.config import ManagerConfig
-from tracker.domain.quarters import parse_report_quarter
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.application.use_cases.backfill_trend_history import run_backfill_trend_history
+from signals.application.use_cases.run_trend_engine import run_trend_engine_for_target_quarter
+from signals.config import ManagerConfig
+from signals.domain.quarters import parse_report_quarter
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 
@@ -125,7 +125,7 @@ def _seed_two_managers_for_quarters(store: StateStore, quarters: list[str]) -> N
 
 
 def test_backfill_default_range_uses_last_9_and_excludes_latest(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         quarters = _quarters(2023, 1, 11)
         _seed_two_managers_for_quarters(store, quarters)
@@ -154,7 +154,7 @@ def test_backfill_default_range_uses_last_9_and_excludes_latest(tmp_path: Path) 
 
 
 def test_backfill_marks_insufficient_history_as_non_error(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         quarters = _quarters(2023, 4, 9)
         _seed_two_managers_for_quarters(store, quarters)
@@ -182,7 +182,7 @@ def test_backfill_marks_insufficient_history_as_non_error(tmp_path: Path) -> Non
 
 
 def test_backfill_skip_existing_without_force(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         quarters = _quarters(2024, 1, 4)
         _seed_two_managers_for_quarters(store, quarters)
@@ -220,7 +220,7 @@ def test_backfill_skip_existing_without_force(tmp_path: Path) -> None:
 
 
 def test_backfill_computes_missing_option_rows_when_stock_rows_exist(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         quarters = _quarters(2024, 1, 4)
         for quarter_idx, quarter in enumerate(quarters, start=1):
@@ -281,7 +281,7 @@ def test_backfill_computes_missing_option_rows_when_stock_rows_exist(tmp_path: P
 
 
 def test_backfill_force_recompute_updates_batch_id(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         quarters = _quarters(2024, 1, 4)
         _seed_two_managers_for_quarters(store, quarters)

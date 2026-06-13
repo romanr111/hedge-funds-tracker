@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 import scripts.analyze_portfolio_positions_trends as portfolio_script
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _script_path() -> Path:
@@ -107,7 +107,7 @@ def _seed_db(path: Path) -> None:
 
 
 def test_script_runs_and_writes_output_json(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_db(db_path)
 
     positions_path = tmp_path / "positions.json"
@@ -199,7 +199,7 @@ def test_script_runs_and_writes_output_json(tmp_path: Path) -> None:
 
 
 def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_db(db_path)
 
     managers_path = tmp_path / "managers.json"
@@ -254,7 +254,7 @@ def test_script_returns_error_on_invalid_input_and_quarter(tmp_path: Path) -> No
 
 
 def test_script_extracts_stocks_from_nested_json_and_maps_china_tickers(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     _seed_db(db_path)
 
     positions_path = tmp_path / "positions.json"

@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tracker.application.use_cases.export_trend_summary import export_trend_summary_if_changed
-from tracker.infrastructure.export.xlsx_exporter import (
+from signals.application.use_cases.export_trend_summary import export_trend_summary_if_changed
+from signals.infrastructure.export.xlsx_exporter import (
     TrendSummaryWorkbookData,
     TrendTable,
 )

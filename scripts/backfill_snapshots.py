@@ -6,9 +6,9 @@ import argparse
 import logging
 from pathlib import Path
 
-from tracker.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
-from tracker.composition import build_runtime
-from tracker.config import load_config
+from signals.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
+from signals.composition import build_runtime
+from signals.config import load_config
 
 
 def main() -> int:

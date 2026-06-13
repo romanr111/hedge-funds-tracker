@@ -1,4 +1,4 @@
-# Hedge Fund 13F Tracker
+# Signals
 
 Lightweight daily checker for hedge fund 13F filings. It pulls each manager's SEC submissions JSON, detects new 13F-HR / 13F-HR/A filings, downloads the filing's `infotable.xml`, diffs positions vs. the last stored snapshot, and sends notifications to Telegram.
 
@@ -21,9 +21,9 @@ The SEC expects a descriptive User-Agent and fair-access request rates.
    ```
    The app auto-loads `.env` from the repo root.
 3. Edit managers list in `config/managers.json`.
-4. Run the tracker:
+4. Run Signals:
    ```bash
-   python -m tracker
+   python -m signals
    ```
 
 ## Configuration
@@ -32,7 +32,7 @@ Required:
 
 Optional:
 - `MANAGERS_FILE` (path to `managers.json`)
-- `DB_PATH` (SQLite path, default `data/tracker.sqlite3`)
+- `DB_PATH` (SQLite path, default `data/signals.sqlite3`)
 - `NOTIFIERS` (comma-separated, e.g. `telegram`)
 - `SEC_RATE_LIMIT_PER_SEC` (requests/sec, must be <= 10; default 5)
 - `MAX_FILING_AGE_DAYS` (ignore filings older than N days; default 180)
@@ -40,7 +40,7 @@ Optional:
 - `TREND_LIVE_PRICES_SYMBOLS_FILE` (symbol map for live price fetch from `stooq`, default `config/cusip_tickers.json`)
 
 Paths in `.env` may be relative to the repo root.
-For local development, prefer a non-tracked path such as `data/local/tracker.local.sqlite3`.
+For local development, prefer a non-tracked path such as `data/local/signals.local.sqlite3`.
 
 Telegram:
 - `TELEGRAM_BOT_TOKEN`
@@ -54,25 +54,25 @@ Telegram:
 ```
 
 ## Behavior Notes
-- The tracker ignores filings older than `MAX_FILING_AGE_DAYS` (default 180 days).
+- The app ignores filings older than `MAX_FILING_AGE_DAYS` (default 180 days).
 - The first time a manager is seen, only the most recent eligible filing is used to seed baseline state.
 - Use `--notify_on_first_start` to send a single baseline notification on that initial seed.
-- After baseline exists, the tracker notifies only when it detects position changes (new, exited, increased, decreased).
+- After baseline exists, the app notifies only when it detects position changes (new, exited, increased, decreased).
 
 ## Scheduling (cron)
 Example daily run at 7am:
 ```bash
-0 7 * * * cd /Users/roman/Documents/Development/hedge_funds_tracker && . .venv/bin/activate && python -m tracker >> logs/cron.log 2>&1
+0 7 * * * cd /Users/roman/Documents/Development/Signals && . .venv/bin/activate && python -m signals >> logs/cron.log 2>&1
 ```
 
 ## GitHub Actions
-This repo includes `/Users/roman/Documents/Development/hedge_funds_tracker/.github/workflows/13f-tracker.yml` to run daily at 07:00 Europe/Kyiv and on manual trigger.
+This repo includes `/Users/roman/Documents/Development/Signals/.github/workflows/signals.yml` to run daily at 07:00 Europe/Kyiv and on manual trigger.
 
 Setup steps:
 1. Push this repository to GitHub.
 2. In GitHub repo settings, ensure Actions are enabled.
 3. Add repository secret `SEC_USER_AGENT` with a descriptive value like:
-   `HedgeFundsTracker/1.0 (you@example.com)`
+   `Signals/1.0 (you@example.com)`
 4. Required Telegram setup for notifications:
    - Secret `TELEGRAM_BOT_TOKEN`
    - Secret `TELEGRAM_CHAT_ID`
@@ -83,31 +83,31 @@ Setup steps:
 6. Run once from Actions tab using `workflow_dispatch` to create baseline state.
 
 Note:
-- Workflow commits `data/tracker.sqlite3` back to the repository to persist state between runs.
+- Workflow commits `data/signals.sqlite3` back to the repository to persist state between runs.
 - Commit message includes `[skip ci]` to avoid loops.
 
 ## CLI commands
-Main tracker:
+Main app:
 ```bash
-python -m tracker
+python -m signals
 ```
 
 Common command examples:
 ```bash
-python -m tracker --help
-python -m tracker --notify_on_first_start
-python -m tracker --notify_on_first_start clean_state
-python -m tracker --dry-run
-python -m tracker --force-trend-recompute
-python -m tracker --show-trends-detailed
-python -m tracker --show-trends-only
-python -m tracker --show-trends-only --trends-quarter 2025Q4
-python -m tracker --show-trends-only --trends-view raw --trends-quarter 2025Q4
-python -m tracker --show-trends-only --trends-explain MSFT --trends-quarter 2025Q4
-python -m tracker --test-notification
-python -m tracker --backfill-trend-history
-python -m tracker --backfill-trend-history --backfill-from-quarter 2023Q1 --backfill-to-quarter 2024Q4
-python -m tracker --backfill-trend-history --backfill-force --backfill-include-latest
+python -m signals --help
+python -m signals --notify_on_first_start
+python -m signals --notify_on_first_start clean_state
+python -m signals --dry-run
+python -m signals --force-trend-recompute
+python -m signals --show-trends-detailed
+python -m signals --show-trends-only
+python -m signals --show-trends-only --trends-quarter 2025Q4
+python -m signals --show-trends-only --trends-view raw --trends-quarter 2025Q4
+python -m signals --show-trends-only --trends-explain MSFT --trends-quarter 2025Q4
+python -m signals --test-notification
+python -m signals --backfill-trend-history
+python -m signals --backfill-trend-history --backfill-from-quarter 2023Q1 --backfill-to-quarter 2024Q4
+python -m signals --backfill-trend-history --backfill-force --backfill-include-latest
 ```
 
 Trend output defaults to a long-term shortlist. It promotes directional rows
@@ -131,9 +131,9 @@ pricing signals.
 
 DB-only trend commands:
 ```bash
-python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4
-python scripts/show_trends.py --db data/tracker.sqlite3 --quarter 2025Q4 --view raw
-python scripts/evaluate_trend_ideas.py --db data/tracker.sqlite3 --quarters 2024Q4 2025Q1 2025Q2
+python scripts/show_trends.py --db data/signals.sqlite3 --quarter 2025Q4
+python scripts/show_trends.py --db data/signals.sqlite3 --quarter 2025Q4 --view raw
+python scripts/evaluate_trend_ideas.py --db data/signals.sqlite3 --quarters 2024Q4 2025Q1 2025Q2
 ```
 
 `scripts/evaluate_trend_ideas.py` measures raw directional candidates against
@@ -143,7 +143,7 @@ forward-return and benchmark-relative coverage.
 
 ### Portfolio Positions Trend Analyzer (MVP)
 Separate DB-only module for analyzing trends by a direct portfolio tickers list.
-This mode does not run SEC sync and does not modify current `python -m tracker` flow.
+This mode does not run SEC sync and does not modify current `python -m signals` flow.
 
 Input JSON format (`--positions-file`):
 ```json
@@ -163,7 +163,7 @@ python scripts/analyze_portfolio_positions_trends.py \
 
 Arguments:
 - `--positions-file` (required): JSON array of tickers.
-- `--db` (optional): SQLite DB path, default `data/tracker.sqlite3`.
+- `--db` (optional): SQLite DB path, default `data/signals.sqlite3`.
 - `--symbols-file` (optional): key-to-ticker map JSON, default `config/cusip_tickers.json`.
 - `--quarter` (optional): target quarter in `YYYYQn`; default is latest common quarter for configured managers.
 - `--output-json` (optional): write full structured output to JSON file.
@@ -180,7 +180,7 @@ Output JSON structure:
   `presentation{action,setup,conviction_target,consensus_buy,consensus_sell,data_fresh}`, `note`
 - for `NO_DATA` rows, trend fields are `null`
 
-Sample data analysis snapshot (captured on February 28, 2026 from local `data/tracker.sqlite3`):
+Sample data analysis snapshot (captured on February 28, 2026 from local `data/signals.sqlite3`):
 ```json
 ["AMZN", "META", "MSFT", "NKE", "PM", "CMG", "VOO", "COP", "VRNA"]
 ```
@@ -188,7 +188,7 @@ Sample data analysis snapshot (captured on February 28, 2026 from local `data/tr
 ```bash
 python3 scripts/analyze_portfolio_positions_trends.py \
   --positions-file /tmp/positions_sample.json \
-  --db data/tracker.sqlite3 \
+  --db data/signals.sqlite3 \
   --symbols-file config/cusip_tickers.json \
   --managers-file config/managers.json
 ```
@@ -207,7 +207,7 @@ Flag reference:
   Without this flag, initial baseline is still stored but notification is suppressed.
 - `clean_state`
   Positional command to clear all rows from `manager_state` before running SEC checks.
-  Example: `python -m tracker --notify_on_first_start clean_state`
+  Example: `python -m signals --notify_on_first_start clean_state`
 - `--dry-run`
   Executes SEC polling and diff logic, NO notifications, no DB writing.
   Useful for safe validation and troubleshooting.
@@ -253,28 +253,28 @@ Flag reference:
   Includes latest completed quarter in backfill mode (excluded by default).
 
 Interactive UX note:
-- In interactive terminal runs (`python -m tracker` in TTY), when trend data is ready the CLI prints the shortlist by default.
+- In interactive terminal runs (`python -m signals` in TTY), when trend data is ready the CLI prints the shortlist by default.
 - To force the same shortlist output in non-interactive runs, use:
-  `python -m tracker --show-trends-detailed`
+  `python -m signals --show-trends-detailed`
 - To print saved trend signals without data collection, use:
-  `python -m tracker --show-trends-only`
+  `python -m signals --show-trends-only`
 - You can print the same shortlist directly with:
   `python scripts/show_trends.py --db <DB_PATH> --quarter <YYYYQn>`
 - Use `--trends-view raw` or `scripts/show_trends.py --view raw` for the older
   broad diagnostic table.
 
 Backfill note:
-- Main trend engine remains latest-quarter only in the default tracker run.
+- Main trend engine remains latest-quarter only in the default signals run.
 - Backfilled rows are explicitly marked in DB with `is_backfill=1` and `backfill_batch_id`.
 
 State viewer utility:
 ```bash
 python scripts/show_state.py
-python scripts/show_state.py --db data/tracker.sqlite3
+python scripts/show_state.py --db data/signals.sqlite3
 ```
 
 ## Trend Engine Logic (Latest-Flow Core)
-`python -m tracker` computes trend signals for only one target quarter: the latest completed quarter common to all configured managers.
+`python -m signals` computes trend signals for only one target quarter: the latest completed quarter common to all configured managers.
 
 ### 1) Input gating
 - Build `common_quarters` as intersection across managers.
@@ -333,6 +333,6 @@ Final signal:
 - `BUY`/`SELL` = target reached for `Strong` setup.
 - `INTERESTING_IDEA` = direction exists and target gap is `<= 5` percentage points.
 - `MONITOR` = target gap is larger than `5` percentage points.
-- thresholds are confidence + regime based (see `tracker/interfaces/cli/main.py`).
+- thresholds are confidence + regime based (see `signals/interfaces/cli/main.py`).
 - recommended compact row:
   - `Ticker | Action | Setup (Regime) | Conviction / Target | Trend | Consensus (+/-) | Data Fresh`

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from tracker.domain.trend_presentation import (
+from signals.domain.trend_presentation import (
     action_for_signal,
     conviction_target,
     directional_contributor_names,
@@ -12,7 +12,7 @@ from tracker.domain.trend_presentation import (
 )
 
 
-def test_target_confidence_for_regime_matches_tracker_rules() -> None:
+def test_target_confidence_for_regime_matches_signals_rules() -> None:
     assert target_confidence_for_regime("STRONG_BUY") == 0.65
     assert target_confidence_for_regime("REVERSAL_SELL") == 0.35
     assert target_confidence_for_regime("EMERGING_BUY") == 0.45
@@ -20,7 +20,7 @@ def test_target_confidence_for_regime_matches_tracker_rules() -> None:
     assert target_confidence_for_regime("NONE") == 0.50
 
 
-def test_action_for_signal_matches_tracker_rules() -> None:
+def test_action_for_signal_matches_signals_rules() -> None:
     assert action_for_signal("STRONG_BUY", 0.70) == "BUY"
     assert action_for_signal("STRONG_SELL", 0.70) == "SELL"
     assert action_for_signal("EMERGING_BUY", 0.43) == "INTERESTING_IDEA"

@@ -9,32 +9,32 @@ import sys
 from typing import Any
 
 try:
-    from tracker.application.use_cases.analyze_portfolio_positions_trends import (
+    from signals.application.use_cases.analyze_portfolio_positions_trends import (
         PortfolioPositionsTrendResult,
         PortfolioTickerTrendRow,
         analyze_portfolio_positions_trends,
     )
-    from tracker.config import load_managers
-    from tracker.infrastructure.market import StooqPriceGateway
-    from tracker.domain.trend_presentation import freshness_icon
-    from tracker.domain.trend_telegram_message import load_symbol_map
-    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+    from signals.config import load_managers
+    from signals.infrastructure.market import StooqPriceGateway
+    from signals.domain.trend_presentation import freshness_icon
+    from signals.domain.trend_telegram_message import load_symbol_map
+    from signals.infrastructure.storage.sqlite_state_repository import StateStore
 except ModuleNotFoundError as exc:
-    if exc.name != "tracker":
+    if exc.name != "signals":
         raise
     repo_root = Path(__file__).resolve().parents[1]
     if str(repo_root) not in sys.path:
         sys.path.insert(0, str(repo_root))
-    from tracker.application.use_cases.analyze_portfolio_positions_trends import (
+    from signals.application.use_cases.analyze_portfolio_positions_trends import (
         PortfolioPositionsTrendResult,
         PortfolioTickerTrendRow,
         analyze_portfolio_positions_trends,
     )
-    from tracker.config import load_managers
-    from tracker.infrastructure.market import StooqPriceGateway
-    from tracker.domain.trend_presentation import freshness_icon
-    from tracker.domain.trend_telegram_message import load_symbol_map
-    from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+    from signals.config import load_managers
+    from signals.infrastructure.market import StooqPriceGateway
+    from signals.domain.trend_presentation import freshness_icon
+    from signals.domain.trend_telegram_message import load_symbol_map
+    from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 CHINA_ADR_TICKER_MAP: dict[str, str] = {
@@ -281,7 +281,7 @@ def main() -> int:
             "(example: [\"AAPL\",\"MSFT\"]) or a nested object with keys containing 'Stocks'"
         ),
     )
-    parser.add_argument("--db", default="data/tracker.sqlite3", help="Path to SQLite DB (default: data/tracker.sqlite3)")
+    parser.add_argument("--db", default="data/signals.sqlite3", help="Path to SQLite DB (default: data/signals.sqlite3)")
     parser.add_argument("--symbols-file", default="config/cusip_tickers.json", help="CUSIP/instrument_key to ticker mapping JSON")
     parser.add_argument("--quarter", help="Optional target quarter in format YYYYQn")
     parser.add_argument("--output-json", help="Optional path to write analysis result JSON")

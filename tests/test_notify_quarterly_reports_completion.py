@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from tracker.application.use_cases.notify_quarterly_reports_completion import (
+from signals.application.use_cases.notify_quarterly_reports_completion import (
     QUARTERLY_COMPLETION_STATE_CIK,
     notify_if_all_reports_published_for_current_quarter,
 )
-from tracker.domain.models import Manager, ManagerState, Position
+from signals.domain.models import Manager, ManagerState, Position
 
 
 def _fixed_now() -> datetime:

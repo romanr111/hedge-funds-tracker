@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import requests
 
-from tracker.infrastructure.market import StooqPriceGateway
+from signals.infrastructure.market import StooqPriceGateway
 
 
 class _FakeResponse:

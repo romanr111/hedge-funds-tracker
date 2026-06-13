@@ -4,12 +4,12 @@ from pathlib import Path
 
 import pytest
 
-from tracker.application.use_cases.analyze_portfolio_positions_trends import (
+from signals.application.use_cases.analyze_portfolio_positions_trends import (
     analyze_portfolio_positions_trends,
 )
-from tracker.config import ManagerConfig
-from tracker.domain.trends import compute_trend_signals
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.config import ManagerConfig
+from signals.domain.trends import compute_trend_signals
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 def _quarter_dates(quarter: str) -> tuple[str, str, str]:
@@ -120,7 +120,7 @@ def _symbol_map() -> dict[str, str]:
 
 
 def test_analyze_portfolio_positions_trends_happy_path_and_no_data(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         result = analyze_portfolio_positions_trends(
@@ -180,7 +180,7 @@ def test_analyze_portfolio_positions_trends_happy_path_and_no_data(tmp_path: Pat
 
 
 def test_analyze_portfolio_positions_trends_aggregates_multi_cusip_signals(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         managers = _managers()
@@ -237,7 +237,7 @@ def test_analyze_portfolio_positions_trends_aggregates_multi_cusip_signals(tmp_p
 
 
 def test_analyze_portfolio_positions_trends_single_key_consensus_matches_signal_counts(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         managers = _managers()
@@ -270,7 +270,7 @@ def test_analyze_portfolio_positions_trends_single_key_consensus_matches_signal_
 
 
 def test_no_position_managers_are_excluded_from_behavior_counts(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         result = analyze_portfolio_positions_trends(
@@ -288,7 +288,7 @@ def test_no_position_managers_are_excluded_from_behavior_counts(tmp_path: Path) 
 
 
 def test_analyze_portfolio_positions_trends_supports_quarter_override(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store, with_q2=True)
         latest = analyze_portfolio_positions_trends(
@@ -314,7 +314,7 @@ def test_analyze_portfolio_positions_trends_supports_quarter_override(tmp_path: 
 
 
 def test_analyze_portfolio_positions_trends_validates_inputs(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
 
@@ -356,7 +356,7 @@ def test_analyze_portfolio_positions_trends_validates_inputs(tmp_path: Path) -> 
 
 
 def test_analyze_portfolio_positions_trends_supports_ticker_alias_separators(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         result = analyze_portfolio_positions_trends(
@@ -386,7 +386,7 @@ def test_analyze_portfolio_positions_trends_supports_ticker_alias_separators(tmp
 
 
 def test_analyze_portfolio_positions_trends_uses_latest_prices_for_data_fresh(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_base_dataset(store)
         managers = _managers()
@@ -412,7 +412,7 @@ def test_analyze_portfolio_positions_trends_uses_latest_prices_for_data_fresh(tm
 
 
 def test_analyze_portfolio_positions_trends_sets_note_for_none_regime(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         _seed_snapshot(
             store,

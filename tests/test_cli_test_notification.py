@@ -8,9 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from tracker.application.use_cases.run_trend_engine import TrendEngineResult
-from tracker.config import AppConfig, ManagerConfig
-cli_main_module = importlib.import_module("tracker.interfaces.cli.main")
+from signals.application.use_cases.run_trend_engine import TrendEngineResult
+from signals.config import AppConfig, ManagerConfig
+cli_main_module = importlib.import_module("signals.interfaces.cli.main")
 
 
 class _FakeNotifier:
@@ -23,7 +23,7 @@ class _FakeNotifier:
 
 def _build_config() -> AppConfig:
     return AppConfig(
-        sec_user_agent="Tracker/1.0 (test@example.com)",
+        sec_user_agent="Signals/1.0 (test@example.com)",
         sec_rate_limit_per_sec=5.0,
         max_filing_age_days=180,
         db_path=Path("data/test.sqlite3"),
@@ -114,7 +114,7 @@ def test_clean_state_clears_store_before_processing(monkeypatch: pytest.MonkeyPa
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is True
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -188,7 +188,7 @@ def test_force_trend_recompute_flag_is_forwarded(monkeypatch: pytest.MonkeyPatch
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -259,7 +259,7 @@ def test_prints_detailed_trend_table_when_ready_and_tty(monkeypatch: pytest.Monk
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -350,7 +350,7 @@ def test_show_trends_detailed_flag_prints_detailed_table(monkeypatch: pytest.Mon
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -445,7 +445,7 @@ def test_show_trends_only_uses_existing_db_and_skips_daily_flow(monkeypatch: pyt
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -528,7 +528,7 @@ def test_live_prices_are_loaded_and_passed_to_trend_engine(monkeypatch: pytest.M
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),
@@ -602,7 +602,7 @@ def test_backfill_mode_skips_daily_flow(monkeypatch: pytest.MonkeyPatch) -> None
     def fake_load_config(*, notify_initial: bool) -> AppConfig:
         assert notify_initial is False
         return AppConfig(
-            sec_user_agent="Tracker/1.0 (test@example.com)",
+            sec_user_agent="Signals/1.0 (test@example.com)",
             sec_rate_limit_per_sec=5.0,
             max_filing_age_days=180,
             db_path=Path("data/test.sqlite3"),

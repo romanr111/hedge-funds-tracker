@@ -28,8 +28,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--db",
-        default="data/tracker.sqlite3",
-        help="Path to SQLite DB (default: data/tracker.sqlite3)",
+        default="data/signals.sqlite3",
+        help="Path to SQLite DB (default: data/signals.sqlite3)",
     )
     args = parser.parse_args()
 

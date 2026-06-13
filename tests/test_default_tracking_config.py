@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tracker.config import load_managers
+from signals.config import load_managers
 
 
 def test_default_symbol_map_covers_top_spy_holding_identifiers() -> None:

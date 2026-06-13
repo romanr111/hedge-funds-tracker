@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tracker.application.use_cases.notify_trend_analysis_summary import (
+from signals.application.use_cases.notify_trend_analysis_summary import (
     TREND_ANALYSIS_SUMMARY_STATE_CIK,
     notify_trend_analysis_summary,
 )
-from tracker.domain.models import TrendStockSignal
-from tracker.domain.trend_telegram_message import build_trend_message_payload
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.domain.models import TrendStockSignal
+from signals.domain.trend_telegram_message import build_trend_message_payload
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 class _CapturingNotifier:
@@ -177,7 +177,7 @@ def _seed_trend_and_snapshot_data(db_path: Path) -> None:
 
 
 def test_notify_trend_analysis_summary_sends_message_and_deduplicates(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
     _seed_trend_and_snapshot_data(db_path)
@@ -217,7 +217,7 @@ def test_notify_trend_analysis_summary_sends_message_and_deduplicates(tmp_path: 
 
     assert len(notifier.sent) == 1
     subject, body = notifier.sent[0]
-    assert subject == "📈 Hedge Funds Trend Analysis 2025Q4"
+    assert subject == "📈 Signals Trend Analysis 2025Q4"
     assert "Quarter: 2025Q4" in body
     assert "Signals analyzed: 2" in body
     assert "Legend: Confidence=current vs target, Managers=buy/sell manager count" not in body
@@ -244,7 +244,7 @@ def test_notify_trend_analysis_summary_sends_message_and_deduplicates(tmp_path: 
 
 
 def test_notify_trend_analysis_summary_skips_pending_trend_status(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
     _seed_trend_and_snapshot_data(db_path)
@@ -272,7 +272,7 @@ def test_notify_trend_analysis_summary_skips_pending_trend_status(tmp_path: Path
 
 
 def test_notify_trend_analysis_summary_force_send_ignores_dedup_marker(tmp_path: Path) -> None:
-    db_path = tmp_path / "tracker.sqlite3"
+    db_path = tmp_path / "signals.sqlite3"
     symbols_path = tmp_path / "symbols.json"
     symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
     _seed_trend_and_snapshot_data(db_path)

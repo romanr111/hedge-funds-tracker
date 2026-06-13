@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from tracker.application.use_cases.evaluate_trend_ideas import evaluate_trend_ideas
-from tracker.domain.models import TrendStockSignal
-from tracker.infrastructure.storage.sqlite_state_repository import StateStore
+from signals.application.use_cases.evaluate_trend_ideas import evaluate_trend_ideas
+from signals.domain.models import TrendStockSignal
+from signals.infrastructure.storage.sqlite_state_repository import StateStore
 
 
 class _FakeHistoryGateway:
@@ -83,7 +83,7 @@ def _seed_snapshot(store: StateStore, *, cik: str, acceptance_datetime: str) -> 
 
 
 def test_evaluate_trend_ideas_uses_latest_snapshot_acceptance_as_availability(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")
@@ -105,7 +105,7 @@ def test_evaluate_trend_ideas_uses_latest_snapshot_acceptance_as_availability(tm
 
 
 def test_evaluate_trend_ideas_reports_symbol_and_price_coverage_gaps(tmp_path: Path) -> None:
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111"), _signal("222222222")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")
@@ -128,7 +128,7 @@ def test_evaluate_trend_ideas_reports_symbol_and_price_coverage_gaps(tmp_path: P
 
 def test_evaluate_trend_ideas_counts_only_available_forward_windows(tmp_path: Path) -> None:
     availability = date(2026, 2, 14)
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")
@@ -163,7 +163,7 @@ def test_evaluate_trend_ideas_counts_only_available_forward_windows(tmp_path: Pa
 def test_evaluate_trend_ideas_uses_next_trading_day_after_forward_window(tmp_path: Path) -> None:
     availability = date(2026, 2, 14)
     next_trading_day_after_horizon = availability + timedelta(days=181)
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")
@@ -200,7 +200,7 @@ def test_evaluate_trend_ideas_uses_next_trading_day_after_forward_window(tmp_pat
 
 def test_evaluate_trend_ideas_does_not_fill_early_windows_from_later_prices(tmp_path: Path) -> None:
     availability = date(2026, 2, 14)
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")
@@ -233,7 +233,7 @@ def test_evaluate_trend_ideas_does_not_fill_early_windows_from_later_prices(tmp_
 
 def test_evaluate_trend_ideas_requires_price_near_availability(tmp_path: Path) -> None:
     availability = date(2026, 2, 14)
-    store = StateStore(tmp_path / "tracker.sqlite3")
+    store = StateStore(tmp_path / "signals.sqlite3")
     try:
         store.replace_trend_stock_signals("2025Q4", [_signal("111111111")])
         _seed_snapshot(store, cik="0000000001", acceptance_datetime="2026-02-14T10:00:00Z")

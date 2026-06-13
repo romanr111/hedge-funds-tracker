@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from tracker.infrastructure.export.xlsx_exporter import (
+from signals.infrastructure.export.xlsx_exporter import (
     PortfolioValueTrendData,
     TrendSummaryWorkbookData,
     TrendTable,
@@ -170,6 +170,6 @@ def test_portfolio_value_trend_sheet_has_aggregate_data(tmp_path: Path) -> None:
     workbook = load_workbook(str(path))
     sheet = workbook["Portfolio Value Trend"]
 
-    assert sheet.cell(row=1, column=1).value == "Hedge Funds Portfolio Value Trend (QoQ)"
+    assert sheet.cell(row=1, column=1).value == "Signals Portfolio Value Trend (QoQ)"
     assert sheet.cell(row=3, column=1).value == "Compared quarters"
     assert sheet.cell(row=3, column=2).value == "2025Q3 -> 2025Q4"
