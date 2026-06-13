@@ -6,6 +6,9 @@ import json
 import logging
 import math
 import os
+import re
+import shutil
+import subprocess
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,6 +24,7 @@ from signals.application.use_cases.backfill_trend_history import run_backfill_tr
 from signals.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
 from signals.application.use_cases.sync_quarter_snapshots import sync_quarter_snapshots
 from signals.application.use_cases.export_trend_summary import export_trend_summary_if_changed
+from signals.application.use_cases.export_trend_summary_json import export_trend_summary_json_if_changed
 from signals.application.use_cases.track_manager import process_manager
 from signals.composition import build_notifier_list, build_runtime
 from signals.config import load_config
@@ -28,15 +32,20 @@ from signals.domain.exceptions import StateStoreError
 from signals.domain.models import Manager
 from signals.domain.quarters import parse_report_quarter
 from signals.domain.trend_presentation import (
+    HIGH_SIGNAL_WEIGHT_THRESHOLD,
+    LEGAL_SUFFIX_PATTERN,
+    MANAGER_SHORT_NAME_OVERRIDES,
     action_for_signal,
     conviction_target,
     directional_contributor_names,
     freshness_icon,
     setup_for_regime,
     target_confidence_for_regime,
+    _compact_manager_name,
 )
 from signals.domain.trend_ideas import TrendIdeaDecision, select_trend_ideas
 from signals.domain.timing import format_local_datetime, now_kyiv
+from signals.infrastructure.export.json_exporter import TrendSummaryJsonData, build_trend_summary_json_data
 from signals.infrastructure.export.xlsx_exporter import (
     PortfolioValueTrendData,
     TrendSummaryWorkbookData,
@@ -359,7 +368,7 @@ def _print_portfolio_value_trend_summary(
         return
 
     print()
-    print("Signals Portfolio Value Trend (QoQ)")
+    print("Hedge Funds Portfolio Value Trend (QoQ)")
     print(f"Compared quarters: {summary.previous_quarter} -> {summary.report_quarter}")
     print(f"Managers analyzed: {summary.analyzed_managers}/{summary.selected_managers}")
 
@@ -573,6 +582,374 @@ def _build_trend_summary_workbook_data(
         portfolio_value_trend=portfolio_data,
         content_fingerprint=content_fingerprint,
     )
+
+
+# ---------------------------------------------------------------------------
+# JSON export helpers
+# ---------------------------------------------------------------------------
+
+
+def _direction_from_signal(signal: Any) -> str | None:
+    regime = str(signal.regime or "").upper()
+    if "BUY" in regime:
+        return "BUY"
+    if "SELL" in regime:
+        return "REDUCTION"
+    return None
+
+
+def _contributors_to_json(contributors_json: str, direction: str | None) -> list[dict[str, Any]]:
+    try:
+        contributors = json.loads(contributors_json)
+    except (TypeError, json.JSONDecodeError):
+        return []
+    if not isinstance(contributors, list):
+        return []
+
+    buy_direction = direction == "BUY"
+    result: list[dict[str, Any]] = []
+    for contributor in contributors:
+        if not isinstance(contributor, dict):
+            continue
+        signal_value = contributor.get("signal_value")
+        if not isinstance(signal_value, (int, float)):
+            continue
+        if (buy_direction and signal_value <= 0) or (not buy_direction and signal_value >= 0):
+            continue
+
+        configured_weight = contributor.get("manager_weight_configured")
+        is_high_weight = isinstance(configured_weight, (int, float)) and float(configured_weight) > HIGH_SIGNAL_WEIGHT_THRESHOLD
+
+        result.append(
+            {
+                "manager_name": str(contributor.get("manager_name") or contributor.get("manager_cik") or ""),
+                "manager_short_name": _compact_manager_name(str(contributor.get("manager_name") or "")),
+                "manager_cik": str(contributor.get("manager_cik") or ""),
+                "configured_weight": configured_weight,
+                "base_weight": contributor.get("manager_weight_base"),
+                "quality_multiplier": contributor.get("manager_quality_multiplier"),
+                "effective_weight": contributor.get("manager_weight_effective"),
+                "flow_participation": contributor.get("flow_participation"),
+                "signal_value": signal_value,
+                "trade_direction_weight": contributor.get("trade_dw"),
+                "previous_weight": contributor.get("prev_weight"),
+                "current_weight": contributor.get("curr_weight"),
+                "previous_shares": contributor.get("prev_shares"),
+                "current_shares": contributor.get("curr_shares"),
+                "impulse_multiplier": contributor.get("impulse_multiplier"),
+                "quarter_price": contributor.get("quarter_price"),
+                "price_weight": contributor.get("price_weight"),
+                "is_high_weight": is_high_weight,
+            }
+        )
+    return result
+
+
+def _signal_to_json_dict(signal: Any, symbol_map: dict[str, str], *, decision: TrendIdeaDecision | None = None) -> dict[str, Any]:
+    ticker = _ticker_for_signal(signal, symbol_map)
+    regime = str(signal.regime or "")
+    direction = _direction_from_signal(signal)
+
+    result: dict[str, Any] = {
+        "ticker": ticker,
+        "instrument": {
+            "key": str(signal.instrument_key or ""),
+            "cusip": signal.cusip,
+            "issuer_name": signal.issuer_name,
+            "title": signal.title,
+            "put_call": signal.put_call,
+        },
+        "regime": regime,
+        "setup": _setup_for_signal(signal),
+        "action": _action_for_signal(signal),
+        "direction": direction,
+        "is_reversal": regime.upper().startswith("REVERSAL_"),
+        "scores": {
+            "idea_score": abs(float(signal.trend_ewma)) * float(signal.confidence),
+            "trend_ewma": float(signal.trend_ewma),
+            "trend_delta": float(signal.trend_delta),
+            "confidence": float(signal.confidence),
+            "impulse_score": float(signal.impulse_score),
+            "accumulation_score": float(signal.accumulation_score),
+            "np_raw": float(signal.np_raw),
+            "np_adj": float(signal.np_adj),
+            "breadth_buy_weight": float(signal.breadth_buy_weight),
+            "breadth_sell_weight": float(signal.breadth_sell_weight),
+        },
+        "support": {
+            "buy_managers": int(signal.buy_managers),
+            "sell_managers": int(signal.sell_managers),
+            "directional_managers": int(signal.buy_managers) if direction == "BUY" else int(signal.sell_managers),
+            "opposite_managers": int(signal.sell_managers) if direction == "BUY" else int(signal.buy_managers),
+            "directional_persistence_quarters": int(signal.persistence_buy) if direction == "BUY" else int(signal.persistence_sell),
+            "opposite_persistence_quarters": int(signal.persistence_sell) if direction == "BUY" else int(signal.persistence_buy),
+        },
+        "market_context": {
+            "freshness_status": _freshness_text(signal),
+            "freshness_ok": signal.freshness_ok,
+            "freshness_multiplier": float(signal.freshness_multiplier),
+        },
+        "risk": {
+            "crowding_hhi": float(signal.crowding_hhi),
+        },
+        "contributors": _contributors_to_json(signal.contributors_json, direction),
+    }
+
+    if decision is not None:
+        result["selection"] = {
+            "state": decision.state.value,
+            "reason": decision.reason,
+        }
+
+    return result
+
+
+def _option_signal_to_json_dict(signal: Any, symbol_map: dict[str, str]) -> dict[str, Any]:
+    base = _signal_to_json_dict(signal, symbol_map)
+    base["option_flow"] = _option_flow_for_signal(signal)
+    return base
+
+
+def _portfolio_summary_to_json(summary: _PortfolioValueTrendSummary | None) -> dict[str, Any] | None:
+    if summary is None:
+        return None
+
+    value_change = _portfolio_value_change_ratio(summary.previous_total_value_k, summary.current_total_value_k)
+    shares_change = _portfolio_value_change_ratio(summary.previous_total_shares, summary.current_total_shares)
+
+    return {
+        "previous_quarter": summary.previous_quarter,
+        "aggregate_value": {
+            "previous_usd_k": summary.previous_total_value_k,
+            "current_usd_k": summary.current_total_value_k,
+            "change_ratio": round(value_change, 6),
+            "direction": _portfolio_value_direction(value_change),
+        },
+        "aggregate_shares": {
+            "previous": summary.previous_total_shares,
+            "current": summary.current_total_shares,
+            "change_ratio": round(shares_change, 6),
+            "direction": _portfolio_shares_direction(shares_change),
+        },
+        "manager_direction_breakdown": {
+            "value": {
+                "growing": summary.growing_managers,
+                "holding": summary.holding_managers,
+                "reducing": summary.reducing_managers,
+            },
+            "shares": {
+                "growing": summary.shares_growing_managers,
+                "holding": summary.shares_holding_managers,
+                "reducing": summary.shares_reducing_managers,
+            },
+        },
+    }
+
+
+def _build_trend_summary_json_data(
+    store: Any,
+    report_quarter: str,
+    *,
+    signals: list[Any],
+    option_signals: list[Any],
+    symbol_map: dict[str, str],
+    min_conf: float,
+    limit: int,
+    manager_ciks: list[str] | None,
+    view: str = "shortlist",
+    show_reversals: bool = False,
+) -> TrendSummaryJsonData:
+    effective_limit = max(1, min(limit, IDEAS_OUTPUT_MAX_ROWS))
+    stock_signals = _stock_only_signals(signals)
+    blend_mode = os.environ.get("TREND_BLEND_MODE", "tactical").strip().lower()
+
+    buy_ideas: list[dict[str, Any]] = []
+    reduction_trends: list[dict[str, Any]] = []
+    reversals: list[dict[str, Any]] = []
+    buy_candidates = 0
+    reduction_candidates = 0
+
+    if view == "raw":
+        sell_min_conf = min(min_conf, SELL_TABLE_MIN_CONF)
+        buy_signals = sorted(
+            [
+                item
+                for item in stock_signals
+                if (
+                    "BUY" in item.regime
+                    and item.regime != "REVERSAL_SELL"
+                    and item.confidence >= min_conf
+                    and item.trend_ewma >= BUY_TABLE_MIN_TREND
+                )
+            ],
+            key=lambda item: item.trend_ewma,
+            reverse=True,
+        )[:effective_limit]
+        sell_signals = sorted(
+            [
+                item
+                for item in stock_signals
+                if "SELL" in item.regime and item.regime != "REVERSAL_BUY" and item.confidence >= sell_min_conf
+            ],
+            key=lambda item: item.trend_ewma,
+        )[:effective_limit]
+        buy_ideas = [_signal_to_json_dict(item, symbol_map) for item in buy_signals]
+        reduction_trends = [_signal_to_json_dict(item, symbol_map) for item in sell_signals]
+        if show_reversals:
+            reversal_signals = sorted(
+                [
+                    item
+                    for item in stock_signals
+                    if item.regime in {"REVERSAL_BUY", "REVERSAL_SELL"} and item.confidence >= min_conf
+                ],
+                key=lambda item: abs(item.trend_delta),
+                reverse=True,
+            )[:effective_limit]
+            reversals = [_signal_to_json_dict(item, symbol_map) for item in reversal_signals]
+        buy_candidates = len([s for s in stock_signals if "BUY" in s.regime])
+        reduction_candidates = len([s for s in stock_signals if "SELL" in s.regime])
+    else:
+        selection = select_trend_ideas(stock_signals, min_conf=min_conf, limit=limit)
+        buy_ideas = [_signal_to_json_dict(d.signal, symbol_map, decision=d) for d in selection.promoted_buy]
+        reduction_trends = [_signal_to_json_dict(d.signal, symbol_map, decision=d) for d in selection.promoted_reduction]
+        buy_candidates = selection.buy_candidates_count
+        reduction_candidates = selection.reduction_candidates_count
+
+    call_signals = _select_option_signals(option_signals, "CALL")
+    put_signals = _select_option_signals(option_signals, "PUT")
+    call_options = [_option_signal_to_json_dict(item, symbol_map) for item in call_signals]
+    put_options = [_option_signal_to_json_dict(item, symbol_map) for item in put_signals]
+
+    portfolio_summary = _compute_portfolio_value_trend_summary(store, report_quarter, manager_ciks or [])
+    portfolio_context = _portfolio_summary_to_json(portfolio_summary)
+
+    payload: dict[str, Any] = {
+        "metadata": {
+            "report_quarter": report_quarter,
+            "generated_at": format_local_datetime(now_kyiv()),
+            "blend_mode": blend_mode,
+            "view_mode": view,
+            "min_confidence": min_conf,
+            "limit_per_section": effective_limit,
+            "signal_counts": {
+                "total_stock_signals": len(stock_signals),
+                "total_option_signals": len(option_signals),
+                "buy_candidates": buy_candidates,
+                "reduction_candidates": reduction_candidates,
+                "promoted_buy_ideas": len(buy_ideas),
+                "promoted_reduction_trends": len(reduction_trends),
+                "reversals": len(reversals),
+                "call_options_exported": len(call_options),
+                "put_options_exported": len(put_options),
+            },
+        },
+        "portfolio_context": portfolio_context,
+        "buy_ideas": buy_ideas,
+        "reduction_trends": reduction_trends,
+        "reversals": reversals,
+        "call_options": call_options,
+        "put_options": put_options,
+    }
+
+    return build_trend_summary_json_data(payload)
+
+
+def _upload_json_to_gdrive(path: Path, folder_id: str, logger: logging.Logger) -> None:
+    if not shutil.which("gog"):
+        logger.warning("gog not found in PATH; skipping Google Drive upload", extra={"path": str(path)})
+        return
+
+    account = os.environ.get("GOG_ACCOUNT", "").strip()
+    cmd = ["gog", "drive", "upload", str(path), "--parent", folder_id]
+    if account:
+        cmd.extend(["--account", account])
+
+    env = os.environ.copy()
+    # Allow non-interactive keyring access if configured
+    for key in ("GOG_KEYRING_PASSWORD", "GOG_HOME", "GOG_ACCESS_TOKEN"):
+        if key in os.environ:
+            env[key] = os.environ[key]
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            env=env,
+            check=False,
+        )
+    except OSError as exc:
+        logger.warning("Google Drive upload failed", extra={"path": str(path), "error": str(exc)})
+        return
+
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()
+        stdout = (proc.stdout or "").strip()
+        logger.warning(
+            "Google Drive upload failed",
+            extra={"path": str(path), "returncode": proc.returncode, "stdout": stdout, "stderr": stderr},
+        )
+        return
+
+    logger.info("Uploaded JSON to Google Drive", extra={"path": str(path), "folder_id": folder_id})
+    print(f"Uploaded trend summary JSON to Google Drive folder {folder_id}")
+
+
+def _maybe_export_trend_summary_json(
+    store: Any,
+    report_quarter: str,
+    *,
+    export_json_path: str,
+    min_conf: float,
+    limit: int,
+    show_reversals: bool,
+    symbols_file: str,
+    manager_ciks: list[str] | None,
+    view: str,
+    dry_run: bool,
+    gdrive_folder_id: str,
+    logger: logging.Logger,
+) -> None:
+    symbol_map = _load_symbol_map(Path(symbols_file))
+    signals = store.list_trend_stock_signals(report_quarter)
+    option_signals = store.list_trend_option_signals(report_quarter)
+    if not signals and not option_signals:
+        logger.info("No trend signals to export to JSON", extra={"report_quarter": report_quarter})
+        return
+
+    data = _build_trend_summary_json_data(
+        store,
+        report_quarter,
+        signals=signals,
+        option_signals=option_signals,
+        symbol_map=symbol_map,
+        min_conf=min_conf,
+        limit=limit,
+        manager_ciks=manager_ciks,
+        view=view,
+        show_reversals=show_reversals,
+    )
+
+    path = Path(export_json_path)
+    if path.suffix != ".json":
+        path = path / f"trend_summary_{report_quarter}.json"
+
+    result = export_trend_summary_json_if_changed(path, data, dry_run=dry_run)
+    logger.info(
+        "Trend summary JSON export",
+        extra={
+            "status": result.status,
+            "path": str(result.path) if result.path else None,
+            "report_quarter": report_quarter,
+            "content_fingerprint": result.content_fingerprint,
+        },
+    )
+    if result.status == "written":
+        print(f"Exported trend summary JSON to {result.path}")
+        if gdrive_folder_id and not dry_run:
+            _upload_json_to_gdrive(path, gdrive_folder_id, logger)
+    elif result.status == "skipped_dry_run" and gdrive_folder_id:
+        logger.info("Dry run: Google Drive upload skipped", extra={"path": str(path), "folder_id": gdrive_folder_id})
 
 
 def _shortlist_row(decision: TrendIdeaDecision, symbol_map: dict[str, str]) -> list[str]:
@@ -992,7 +1369,7 @@ def main() -> int:
 
 
 def _main(logger: logging.Logger) -> int:
-    parser = argparse.ArgumentParser(prog="signals", description="Track 13F filings and send notifications.")
+    parser = argparse.ArgumentParser(description="Track 13F filings and send notifications.")
     parser.add_argument("--notify_on_first_start", action="store_true", help="Notify on initial baseline set")
     parser.add_argument(
         "clean_state",
@@ -1014,7 +1391,7 @@ def _main(logger: logging.Logger) -> int:
     parser.add_argument(
         "--show-trends-detailed",
         action="store_true",
-        help="Always print trend output after signals run (also in non-interactive output).",
+        help="Always print trend output after tracker run (also in non-interactive output).",
     )
     parser.add_argument(
         "--show-trends-only",
@@ -1105,6 +1482,26 @@ def _main(logger: logging.Logger) -> int:
         default="data/exports",
         help="Directory or file path for --export-xlsx output (default: data/exports).",
     )
+    parser.add_argument(
+        "--export-json",
+        action="store_true",
+        help="Export trend summary to a JSON file after computation.",
+    )
+    parser.add_argument(
+        "--export-json-path",
+        default="data/exports",
+        help="Directory or file path for --export-json output (default: data/exports).",
+    )
+    parser.add_argument(
+        "--export-json-gdrive",
+        action="store_true",
+        help="Export to JSON and upload to Google Drive (implies --export-json).",
+    )
+    parser.add_argument(
+        "--export-json-gdrive-folder",
+        default=os.environ.get("EXPORT_JSON_GDRIVE_FOLDER_ID", ""),
+        help="Google Drive folder ID for JSON upload (default: EXPORT_JSON_GDRIVE_FOLDER_ID env var).",
+    )
     args = parser.parse_args()
     show_trends_only_flag = bool(getattr(args, "show_trends_only", False))
     send_trend_summary_from_db_flag = bool(getattr(args, "send_trend_summary_from_db", False))
@@ -1179,6 +1576,10 @@ def _main(logger: logging.Logger) -> int:
         return 2
     export_xlsx_flag = bool(getattr(args, "export_xlsx", False))
     export_xlsx_path = getattr(args, "export_xlsx_path", "data/exports")
+    export_json_gdrive_flag = bool(getattr(args, "export_json_gdrive", False))
+    export_json_gdrive_folder = getattr(args, "export_json_gdrive_folder", "")
+    export_json_flag = bool(getattr(args, "export_json", False)) or export_json_gdrive_flag
+    export_json_path = getattr(args, "export_json_path", "data/exports")
 
     try:
         config = load_config(notify_initial=args.notify_on_first_start)
@@ -1189,7 +1590,7 @@ def _main(logger: logging.Logger) -> int:
     if not config.notifiers:
         logger.warning("No notifiers configured, running without notifications")
     logger.info(
-        "Signals run started",
+        "Tracker run started",
         extra={
             "managers_count": len(config.managers),
             "dry_run": args.dry_run,
@@ -1208,7 +1609,7 @@ def _main(logger: logging.Logger) -> int:
         if not notifiers:
             logger.error("No notifiers configured for test notification")
             return 1
-        subject = "Signals test notification"
+        subject = "13F Tracker test notification"
         body = f"Test notification sent at {format_local_datetime(now_kyiv())}."
         _send_notifications(notifiers, subject, body)
         logger.info("Test notification sent")
@@ -1236,9 +1637,25 @@ def _main(logger: logging.Logger) -> int:
                 view=trends_view,
                 explain=trends_explain,
             )
+            if export_json_flag:
+                gdrive_folder_id = export_json_gdrive_folder.strip() if export_json_gdrive_flag else ""
+                _maybe_export_trend_summary_json(
+                    runtime.store,
+                    quarter_for_table,
+                    export_json_path=export_json_path,
+                    min_conf=args.trends_min_conf,
+                    limit=args.trends_limit,
+                    show_reversals=args.trends_show_reversals,
+                    symbols_file=args.trends_symbols_file,
+                    manager_ciks=manager_ciks,
+                    view=trends_view,
+                    dry_run=args.dry_run,
+                    gdrive_folder_id=gdrive_folder_id,
+                    logger=logger,
+                )
         runtime.store.close()
         logger.info(
-            "Signals run finished",
+            "Tracker run finished",
             extra={
                 "finished_at_local": format_local_datetime(now_kyiv()),
                 "managers_count": len(config.managers),
@@ -1278,7 +1695,7 @@ def _main(logger: logging.Logger) -> int:
             )
         runtime.store.close()
         logger.info(
-            "Signals run finished",
+            "Tracker run finished",
             extra={
                 "finished_at_local": format_local_datetime(now_kyiv()),
                 "managers_count": len(config.managers),
@@ -1346,7 +1763,7 @@ def _main(logger: logging.Logger) -> int:
 
         runtime.store.close()
         logger.info(
-            "Signals run finished",
+            "Tracker run finished",
             extra={
                 "finished_at_local": format_local_datetime(now_kyiv()),
                 "managers_count": len(config.managers),
@@ -1461,6 +1878,25 @@ def _main(logger: logging.Logger) -> int:
                 logger=logger,
             )
 
+    if export_json_flag:
+        export_quarter = trend_result.report_quarter or runtime.store.get_latest_trend_quarter()
+        if export_quarter:
+            gdrive_folder_id = export_json_gdrive_folder.strip() if export_json_gdrive_flag else ""
+            _maybe_export_trend_summary_json(
+                runtime.store,
+                export_quarter,
+                export_json_path=export_json_path,
+                min_conf=args.trends_min_conf,
+                limit=args.trends_limit,
+                show_reversals=args.trends_show_reversals,
+                symbols_file=args.trends_symbols_file,
+                manager_ciks=manager_ciks,
+                view=trends_view,
+                dry_run=args.dry_run,
+                gdrive_folder_id=gdrive_folder_id,
+                logger=logger,
+            )
+
     notify_if_all_reports_published_for_current_quarter(
         managers,
         runtime.store,
@@ -1485,7 +1921,7 @@ def _main(logger: logging.Logger) -> int:
     )
     runtime.store.close()
     logger.info(
-        "Signals run finished",
+        "Tracker run finished",
         extra={
             "finished_at_local": format_local_datetime(now_kyiv()),
             "managers_count": len(config.managers),

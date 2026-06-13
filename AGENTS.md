@@ -153,8 +153,17 @@ python -m signals --backfill-trend-history --backfill-from-quarter 2023Q1 --back
 python -m signals --export-xlsx
 python -m signals --export-xlsx --export-xlsx-path data/exports
 
+# Export trend summary to JSON (idempotent — skips if unchanged)
+python -m signals --export-json
+python -m signals --export-json --export-json-path data/exports
+
+# Export JSON and upload to Google Drive (requires gog CLI and EXPORT_JSON_GDRIVE_FOLDER_ID)
+python -m signals --export-json-gdrive
+python -m signals --export-json-gdrive --export-json-gdrive-folder 1qajWZ0gntG9d6k6bi-LefzOSE9fpUOJE
+
 # Dry run with export preview (no file written)
 python -m signals --dry-run --export-xlsx
+python -m signals --dry-run --export-json
 
 # Test Telegram notification
 python -m signals --test-notification
@@ -210,7 +219,7 @@ Configuration is environment-driven. The app auto-loads `.env` from the repo roo
 - Tests use `tmp_path` and `monkeypatch` fixtures extensively.
 - Storage tests create temporary SQLite databases via `tmp_path`.
 - When testing config, clear environment variables first using a helper like `_clear_config_env(monkeypatch)` to avoid leakage from the host or `.env` file.
-- The CI test count as of the latest verified run: 185 tests.
+- The CI test count as of the latest verified run: 194 tests.
 
 ## Architecture Decisions
 
