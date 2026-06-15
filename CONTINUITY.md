@@ -59,3 +59,4 @@
 - 2026-05-24: Temporary e2e smoke passed: signals backfill CLI restored missing option rows, `python -m signals --show-trends-only` and `scripts/show_trends.py` rendered option sections, and option-only XLSX export produced `Call Option Trends`.
 - 2026-05-24: `git diff --check` passed.
 - 2026-05-24: Reset and switched `codex/options-trend-tables` to current `main` tip `0f935c3` while preserving the uncommitted feature diff.
+- 2026-06-15: Fixed Actions run `27538230507` failure by restoring CLI heading `Signals Portfolio Value Trend (QoQ)` in `signals/interfaces/cli/main.py`; focused tests passed (`2 passed in 0.32s`) and full local pipeline-equivalent pytest passed (`194 passed in 15.30s`). GitHub run `27541478950` was green only because schedule-gated steps were skipped.

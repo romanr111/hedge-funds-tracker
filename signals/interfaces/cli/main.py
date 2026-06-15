@@ -368,7 +368,7 @@ def _print_portfolio_value_trend_summary(
         return
 
     print()
-    print("Hedge Funds Portfolio Value Trend (QoQ)")
+    print("Signals Portfolio Value Trend (QoQ)")
     print(f"Compared quarters: {summary.previous_quarter} -> {summary.report_quarter}")
     print(f"Managers analyzed: {summary.analyzed_managers}/{summary.selected_managers}")
 
