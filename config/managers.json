@@ -77,11 +77,21 @@
   {
     "name": "Coatue Management LLC",
     "cik": "0001135730",
-    "weight": 1.0
+    "weight": 1.5
   },
   {
     "name": "Situational Awareness LP",
     "cik": "0002045724",
+    "weight": 1.0
+  },
+  {
+    "name": "Lewis Sanders - Sanders Capital",
+    "cik": "0001508097",
+    "weight": 1.0
+  },
+  {
+    "name": "Tiger Global Management LLC",
+    "cik": "0001167483",
     "weight": 1.0
   }
 ]
