@@ -58,6 +58,7 @@ Telegram:
 - The first time a manager is seen, only the most recent eligible filing is used to seed baseline state.
 - Use `--notify_on_first_start` to send a single baseline notification on that initial seed.
 - After baseline exists, the app notifies only when it detects position changes (new, exited, increased, decreased).
+- At the 07:00 Kyiv scheduled run on the final NYSE trading day of each calendar quarter, it sends one quarter-end notification. The 19:00 run does not send this reminder.
 
 ## Scheduling (cron)
 Example daily run at 7am:

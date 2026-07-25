@@ -19,6 +19,7 @@ from signals.application.ports.notifier import NotifierPort
 from signals.application.use_cases.notify_quarterly_reports_completion import (
     notify_if_all_reports_published_for_current_quarter,
 )
+from signals.application.use_cases.notify_nyse_quarter_close import notify_on_nyse_quarter_close
 from signals.application.use_cases.notify_trend_analysis_summary import notify_trend_analysis_summary
 from signals.application.use_cases.backfill_trend_history import run_backfill_trend_history
 from signals.application.use_cases.run_trend_engine import run_trend_engine_for_latest_completed_quarter
@@ -1782,6 +1783,14 @@ def _main(logger: logging.Logger) -> int:
         logger.info("State store cleared before run", extra={"rows_deleted": cleared_rows})
 
     managers = [Manager(name=manager_config.name, cik=manager_config.cik) for manager_config in config.managers]
+    if runtime.notifiers:
+        notify_on_nyse_quarter_close(
+            runtime.store,
+            runtime.notifiers,
+            runtime.nyse_calendar,
+            dry_run=args.dry_run,
+            logger=logger,
+        )
     for manager in managers:
         process_manager(
             manager,

@@ -63,10 +63,17 @@ def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPat
 
     def fake_build_runtime(*args: object, **kwargs: object) -> SimpleNamespace:
         del args, kwargs
-        return SimpleNamespace(client=object(), store=fake_store, notifiers=[object()], history_gateway=object())
+        return SimpleNamespace(
+            client=object(),
+            store=fake_store,
+            notifiers=[object()],
+            history_gateway=object(),
+            nyse_calendar=object(),
+        )
 
     def fake_process_manager(*args: object, **kwargs: object) -> None:
         del args, kwargs
+        call_order.append("manager")
 
     def fake_sync_quarter_snapshots(*args: object, **kwargs: object) -> int:
         del args, kwargs
@@ -85,6 +92,10 @@ def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPat
         del args, kwargs
         call_order.append("quarterly_completion")
 
+    def fake_notify_nyse_quarter_close(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        call_order.append("nyse_quarter_close")
+
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", fake_parse_args)
     monkeypatch.setattr(cli_main_module, "load_config", fake_load_config)
     monkeypatch.setattr(cli_main_module, "build_runtime", fake_build_runtime)
@@ -97,6 +108,12 @@ def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPat
         "notify_if_all_reports_published_for_current_quarter",
         fake_notify_if_all_reports,
     )
+    monkeypatch.setattr(
+        cli_main_module,
+        "notify_on_nyse_quarter_close",
+        fake_notify_nyse_quarter_close,
+        raising=False,
+    )
 
     exit_code = cli_main_module._main(logging.getLogger("test"))
 
@@ -106,4 +123,4 @@ def test_main_triggers_trend_analysis_notification(monkeypatch: pytest.MonkeyPat
     assert captured_calls[0]["report_quarter"] == "2025Q4"
     assert captured_calls[0]["manager_ciks"] == ["0000000001"]
     assert captured_calls[0]["show_reversals"] is True
-    assert call_order == ["quarterly_completion", "trend_summary"]
+    assert call_order == ["nyse_quarter_close", "manager", "quarterly_completion", "trend_summary"]

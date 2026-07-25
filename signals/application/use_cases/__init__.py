@@ -12,6 +12,11 @@ from .notify_quarterly_reports_completion import (
     QUARTERLY_COMPLETION_STATE_NAME,
     notify_if_all_reports_published_for_current_quarter,
 )
+from .notify_nyse_quarter_close import (
+    NYSE_QUARTER_CLOSE_STATE_CIK,
+    NYSE_QUARTER_CLOSE_STATE_NAME,
+    notify_on_nyse_quarter_close,
+)
 from .notify_trend_analysis_summary import (
     TREND_ANALYSIS_SUMMARY_STATE_CIK,
     TREND_ANALYSIS_SUMMARY_STATE_NAME,
@@ -28,6 +33,8 @@ from .track_manager import process_manager
 __all__ = [
     "QUARTERLY_COMPLETION_STATE_CIK",
     "QUARTERLY_COMPLETION_STATE_NAME",
+    "NYSE_QUARTER_CLOSE_STATE_CIK",
+    "NYSE_QUARTER_CLOSE_STATE_NAME",
     "PortfolioPositionsTrendResult",
     "PortfolioTickerFundBehavior",
     "PortfolioTickerPresentation",
@@ -38,6 +45,7 @@ __all__ = [
     "analyze_portfolio_positions_trends",
     "detect_latest_completed_report_quarter",
     "notify_if_all_reports_published_for_current_quarter",
+    "notify_on_nyse_quarter_close",
     "notify_trend_analysis_summary",
     "process_manager",
     "run_backfill_trend_history",
