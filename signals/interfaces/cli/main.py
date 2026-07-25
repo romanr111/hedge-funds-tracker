@@ -28,7 +28,7 @@ from signals.application.use_cases.export_trend_summary_json import export_trend
 from signals.application.use_cases.track_manager import process_manager
 from signals.composition import build_notifier_list, build_runtime
 from signals.config import load_config
-from signals.domain.exceptions import StateStoreError
+from signals.domain.exceptions import NotificationError, StateStoreError
 from signals.domain.models import Manager
 from signals.domain.quarters import parse_report_quarter
 from signals.domain.trend_presentation import (
@@ -1365,7 +1365,11 @@ def main() -> int:
     trace_id = new_trace_id()
 
     with log_context(trace_id=trace_id):
-        return _main(logger)
+        try:
+            return _main(logger)
+        except NotificationError:
+            logger.error("Notification delivery failed")
+            return 1
 
 
 def _main(logger: logging.Logger) -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Final, Iterable, Mapping, Protocol
@@ -7,6 +8,35 @@ from typing import Final, Iterable, Mapping, Protocol
 import requests
 
 from signals.domain.exceptions import NotificationError
+
+MAX_TELEGRAM_SEND_ATTEMPTS: Final = 3
+
+
+def _status_code_for_error(exc: requests.RequestException) -> int | None:
+    response = exc.response
+    return response.status_code if response is not None else None
+
+
+def _is_retryable_request_error(exc: requests.RequestException) -> bool:
+    status_code = _status_code_for_error(exc)
+    if status_code is not None:
+        return status_code == 429 or 500 <= status_code < 600
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def _retry_delay_seconds(exc: requests.RequestException, *, failed_attempt: int) -> float:
+    response = exc.response
+    if response is not None and response.status_code == 429:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = None
+        if isinstance(payload, dict):
+            parameters = payload.get("parameters")
+            retry_after = parameters.get("retry_after") if isinstance(parameters, dict) else None
+            if isinstance(retry_after, (int, float)) and retry_after > 0:
+                return float(retry_after)
+    return float(2**failed_attempt)
 
 
 class Notifier:
@@ -22,11 +52,20 @@ class TelegramNotifier(Notifier):
     def send(self, subject: str, body: str) -> None:
         message = f"{subject}\n\n{body}".strip()
         url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-        try:
-            response = requests.post(url, json={"chat_id": self.chat_id, "text": message}, timeout=30)
-            response.raise_for_status()
-        except requests.RequestException as exc:
-            raise NotificationError(f"Failed to send Telegram notification: {exc}") from exc
+        failure_detail = "request failed"
+        for failed_attempt in range(MAX_TELEGRAM_SEND_ATTEMPTS):
+            try:
+                response = requests.post(url, json={"chat_id": self.chat_id, "text": message}, timeout=30)
+                response.raise_for_status()
+                return
+            except requests.RequestException as exc:
+                if _is_retryable_request_error(exc) and failed_attempt + 1 < MAX_TELEGRAM_SEND_ATTEMPTS:
+                    time.sleep(_retry_delay_seconds(exc, failed_attempt=failed_attempt))
+                    continue
+                status_code = _status_code_for_error(exc)
+                failure_detail = f"HTTP {status_code}" if status_code is not None else type(exc).__name__
+                break
+        raise NotificationError(f"Failed to send Telegram notification ({failure_detail}).")
 
 
 @dataclass(frozen=True)

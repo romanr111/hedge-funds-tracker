@@ -10,6 +10,7 @@ import pytest
 
 from signals.application.use_cases.run_trend_engine import TrendEngineResult
 from signals.config import AppConfig, ManagerConfig
+from signals.domain.exceptions import NotificationError
 cli_main_module = importlib.import_module("signals.interfaces.cli.main")
 
 
@@ -79,6 +80,23 @@ def test_test_notification_skips_runtime_initialization(monkeypatch: pytest.Monk
     exit_code = cli_main_module._main(logging.getLogger("test"))
     assert exit_code == 0
     assert len(fake_notifier.sent) == 1
+
+
+def test_main_hides_notification_error_details(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    monkeypatch.setattr(cli_main_module, "configure_logging", lambda: None)
+    monkeypatch.setattr(cli_main_module, "new_trace_id", lambda: "trace-id")
+
+    def fail_main(*args: object, **kwargs: object) -> int:
+        del args, kwargs
+        raise NotificationError("example-secret-token")
+
+    monkeypatch.setattr(cli_main_module, "_main", fail_main)
+
+    with caplog.at_level(logging.ERROR):
+        assert cli_main_module.main() == 1
+
+    assert "Notification delivery failed" in caplog.text
+    assert "example-secret-token" not in caplog.text
 
 
 def test_clean_state_clears_store_before_processing(monkeypatch: pytest.MonkeyPatch) -> None:
