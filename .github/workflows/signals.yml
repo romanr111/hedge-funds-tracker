@@ -15,14 +15,14 @@ on:
         type: boolean
   schedule:
     # GitHub Actions schedule is UTC.
-    # 04:00 UTC matches 07:00 Europe/Kyiv during DST (UTC+3).
-    - cron: "0 4 * * *"
-    # 05:00 UTC matches 07:00 Europe/Kyiv during standard time (UTC+2).
-    - cron: "0 5 * * *"
-    # 16:00 UTC matches 19:00 Europe/Kyiv during DST (UTC+3).
-    - cron: "0 16 * * *"
-    # 17:00 UTC matches 19:00 Europe/Kyiv during standard time (UTC+2).
-    - cron: "0 17 * * *"
+    # 04:17 UTC matches 07:17 Europe/Kyiv during DST (UTC+3).
+    - cron: "17 4 * * *"
+    # 05:17 UTC matches 07:17 Europe/Kyiv during standard time (UTC+2).
+    - cron: "17 5 * * *"
+    # 16:17 UTC matches 19:17 Europe/Kyiv during DST (UTC+3).
+    - cron: "17 16 * * *"
+    # 17:17 UTC matches 19:17 Europe/Kyiv during standard time (UTC+2).
+    - cron: "17 17 * * *"
 
 permissions:
   contents: write
@@ -54,7 +54,7 @@ jobs:
           echo "Trigger schedule: ${trigger_schedule}"
 
           case "${kyiv_offset}:${trigger_schedule}" in
-            "+0300:0 4 * * *"|"+0300:0 16 * * *"|"+0200:0 5 * * *"|"+0200:0 17 * * *")
+            "+0300:17 4 * * *"|"+0300:17 16 * * *"|"+0200:17 5 * * *"|"+0200:17 17 * * *")
               echo "should_run=true" >> "$GITHUB_OUTPUT"
               echo "Schedule matches current Kyiv offset; continuing."
               ;;
