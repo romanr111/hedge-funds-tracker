@@ -67,7 +67,15 @@ def test_sync_quarter_snapshots_selects_latest_and_aggregates_duplicates(tmp_pat
         manager = Manager(name="Fund A", cik="0000000001")
         client = _Client()
 
-        rows = sync_quarter_snapshots([manager], store, client, max_quarters=4, dry_run=False)
+        now_fn = lambda: datetime(2026, 2, 20, 12, 0, tzinfo=timezone.utc)
+        rows = sync_quarter_snapshots(
+            [manager],
+            store,
+            client,
+            max_quarters=4,
+            dry_run=False,
+            now_fn=now_fn,
+        )
         assert rows == 1
         assert client.url_calls == ["new-accession"]
 
@@ -82,7 +90,14 @@ def test_sync_quarter_snapshots_selects_latest_and_aggregates_duplicates(tmp_pat
         assert by_cusip["222222222"]["value"] == 400
 
         # Re-running should keep one logical row for the quarter (idempotent upsert).
-        rows_second = sync_quarter_snapshots([manager], store, client, max_quarters=4, dry_run=False)
+        rows_second = sync_quarter_snapshots(
+            [manager],
+            store,
+            client,
+            max_quarters=4,
+            dry_run=False,
+            now_fn=now_fn,
+        )
         assert rows_second == 1
         all_rows = store.list_snapshots_for_quarters(["2025Q4"], ["0000000001"])
         assert len(all_rows) == 1
