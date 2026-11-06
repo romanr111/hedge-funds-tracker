@@ -20,8 +20,8 @@ Before Git mutations, reconcile the ledger with actual worktree, branch, and sta
 
 - Goal: Land the 13F reporting-source transitions feature on `main` via draft PR.
 - Success criteria: branch `reporting-source-transitions` pushed, draft PR open, full local suite green on the new base, CI green, review approval.
-- Current state: branch created from `origin/main` (8ccb1a7); feature work plus CodeGraph-removal edits restored onto the base; commits and draft PR pending.
-- Next action: push branch, open draft PR, await review/CI.
+- Current state: draft PR #41 open (`reporting-source-transitions` -> `main`, branch from `origin/main` 8ccb1a7); local suite green on the branch (221 passed); awaiting review/CI.
+- Next action: await PR review and CI; address feedback.
 - Open questions: None.
 - Stale/superseded: CodeGraph-repair details below are historical receipts.
 
@@ -50,6 +50,7 @@ Before Git mutations, reconcile the ledger with actual worktree, branch, and sta
 
 ## Done (recent)
 
+- 2026-11-06 [RESEARCH] Delivered US market-intelligence dashboard research report at `reports/2026-11-06-market-intelligence-research-uk.md`; three subagent web-research reports synthesized; values date-stamped 2026-11-06; no code, schema, or service changes; concurrent reporting-source work untouched.
 - 2026-11-06 Self-QA of the uncommitted feature: read-only review, no edits; full suite 220 passed in 166.86s on the pre-rebase tree; only low-severity findings.
 - 2026-11-06 Moved the uncommitted set onto origin/main 8ccb1a7: `.gitignore` merged as union, local DB conflict resolved from byte-exact backup, duplicate `now_fn` pinning in `tests/test_sync_quarter_snapshots.py` resolved to origin's identical version.
 - 2026-07-26 [TOOL] Retired CodeGraph: removed the user-local installation, MCP registrations, local index, bootstrap scripts, and active routing instructions.
@@ -58,7 +59,8 @@ Before Git mutations, reconcile the ledger with actual worktree, branch, and sta
 ## Receipts
 
 - 2026-11-06: origin/main ran 50 DB-chore commits plus workflow/`.gitignore`/test changes ahead of local `main` (e8c81bd); branch was created from 8ccb1a7, not the stale local tip.
-- 2026-11-06: `pytest -q`: 220 passed in 166.86s on the pre-rebase tree; rerun on the new base recorded in the PR evidence.
+- 2026-11-06: Draft PR #41 opened: https://github.com/romanr111/hedge-funds-tracker/pull/41 (verified OPEN/draft, base main). Commits: 75354db chore codegraph, 7c47cb8 feat reporting-source, dfb8255 ledger.
+- 2026-11-06: `pytest -q`: 220 passed in 166.86s on the pre-rebase tree; on the branch base: 221 passed in 1012.16s (slow run under concurrent subagent load).
 - 2026-11-06: Local DB backup: /tmp/signals-preserv/signals-local-20261106.sqlite3 (7.8M, byte-matched after conflict resolution).
 - 2026-07-25: CodeGraph index rebuild: 99 files, 1,608 nodes, 3,775 edges; global install attempts failed with EPERM (Homebrew Cellar, ~/.codegraph).
 - 2026-06-15: Restored CLI heading fix for Actions run 27538230507; full local pipeline-equivalent pytest 194 passed in 15.30s.
