@@ -7,7 +7,13 @@ class SecGateway(Protocol):
     def get_submissions(self, cik: str) -> dict[str, Any]:
         ...
 
+    def get_all_submissions(self, cik: str) -> dict[str, Any]:
+        ...
+
     def find_information_table_url(self, cik: str, accession: str) -> str:
+        ...
+
+    def find_primary_document_url(self, cik: str, accession: str, primary_document: str | None) -> str:
         ...
 
     def get_text(self, url: str) -> str:

@@ -190,6 +190,24 @@ class SecClient:
             entries.append(FilingIndexEntry(name=name, type=type_field if isinstance(type_field, str) else None))
         return entries
 
+    def find_primary_document_url(self, cik: str, accession: str, primary_document: str | None) -> str:
+        accession_dir = accession_no_dashes(accession)
+        base_url = urljoin(EDGAR_ARCHIVES_BASE, f"{cik_dir(cik)}/{accession_dir}/")
+        if primary_document:
+            return urljoin(base_url, primary_document)
+
+        try:
+            entries = self.get_filing_index(cik, accession)
+        except InformationTableLookupError as exc:
+            raise InformationTableLookupError(
+                f"Could not locate primary document for accession {accession}: {exc}"
+            ) from exc
+        candidates = [entry.name for entry in entries if entry.name.lower().endswith((".xml", ".htm", ".html"))]
+        if not candidates:
+            raise InformationTableNotFoundError(f"Could not locate primary document for accession {accession}.")
+        candidates.sort(key=lambda name: ("primary" not in name.lower(), name.lower()))
+        return urljoin(base_url, candidates[0])
+
     def find_information_table_url(self, cik: str, accession: str) -> str:
         accession_dir = accession_no_dashes(accession)
         base_url = urljoin(EDGAR_ARCHIVES_BASE, f"{cik_dir(cik)}/{accession_dir}/")

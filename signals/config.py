@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from signals.domain.quarters import parse_report_quarter, quarter_sort_key
+
 load_dotenv: Callable[..., bool] | None
 try:
     from dotenv import load_dotenv as _load_dotenv
@@ -54,10 +56,44 @@ else:
 
 
 @dataclass(frozen=True)
+class FilingSourcePeriod:
+    """Approved filing sources for a canonical manager during a report-quarter range."""
+
+    source_ciks: tuple[str, ...]
+    from_quarter: str | None = None
+    through_quarter: str | None = None
+    overlap_policy: str | None = None
+
+    def includes(self, report_quarter: str) -> bool:
+        target = quarter_sort_key(report_quarter)
+        if self.from_quarter is not None and target < quarter_sort_key(self.from_quarter):
+            return False
+        if self.through_quarter is not None and target > quarter_sort_key(self.through_quarter):
+            return False
+        return True
+
+
+@dataclass(frozen=True)
 class ManagerConfig:
     name: str
     cik: str
     weight: float
+    filing_source_periods: tuple[FilingSourcePeriod, ...] = ()
+
+    def source_ciks_for_quarter(self, report_quarter: str) -> tuple[str, ...]:
+        """Return explicitly approved sources, retaining the legacy canonical fallback."""
+
+        if parse_report_quarter(report_quarter) is None:
+            raise ValueError(f"Invalid report quarter: {report_quarter}")
+
+        matches = [period for period in self.filing_source_periods if period.includes(report_quarter)]
+        if len(matches) > 1:
+            raise ValueError(
+                f"Manager '{self.name}' has overlapping filing source periods for {report_quarter}."
+            )
+        if not matches:
+            return (self.cik,)
+        return matches[0].source_ciks
 
 
 @dataclass(frozen=True)
@@ -83,6 +119,121 @@ def _default_managers_file() -> Path:
     return REPO_ROOT / "config" / "managers.json"
 
 
+def _read_optional_quarter(
+    raw_value: object,
+    *,
+    manager_name: str,
+    field_name: str,
+) -> str | None:
+    if raw_value is None:
+        return None
+    value = raw_value.strip() if isinstance(raw_value, str) else ""
+    if parse_report_quarter(value) is None:
+        raise ValueError(
+            f"Manager '{manager_name}' has invalid '{field_name}' report quarter."
+        )
+    return value
+
+
+def _parse_filing_source_periods(
+    raw_value: object,
+    *,
+    manager_name: str,
+) -> tuple[FilingSourcePeriod, ...]:
+    if raw_value is None:
+        return ()
+    if not isinstance(raw_value, list):
+        raise ValueError(f"Manager '{manager_name}' field 'filing_source_periods' must be a JSON array.")
+
+    periods: list[FilingSourcePeriod] = []
+    for raw_period in raw_value:
+        if not isinstance(raw_period, dict):
+            raise ValueError(
+                f"Manager '{manager_name}' each filing source period must be an object."
+            )
+
+        raw_sources = raw_period.get("source_ciks")
+        if not isinstance(raw_sources, list) or not raw_sources:
+            raise ValueError(
+                f"Manager '{manager_name}' each filing source period must include non-empty 'source_ciks'."
+            )
+        source_ciks = tuple(
+            source.strip() if isinstance(source, str) else "" for source in raw_sources
+        )
+        if not all(source_ciks) or len(set(source_ciks)) != len(source_ciks):
+            raise ValueError(
+                f"Manager '{manager_name}' filing source CIKs must be non-empty and unique."
+            )
+
+        from_quarter = _read_optional_quarter(
+            raw_period.get("from_quarter"),
+            manager_name=manager_name,
+            field_name="from_quarter",
+        )
+        through_quarter = _read_optional_quarter(
+            raw_period.get("through_quarter"),
+            manager_name=manager_name,
+            field_name="through_quarter",
+        )
+        if from_quarter is None and through_quarter is None:
+            raise ValueError(
+                f"Manager '{manager_name}' each filing source period must include "
+                "'from_quarter' or 'through_quarter'."
+            )
+        if (
+            from_quarter is not None
+            and through_quarter is not None
+            and quarter_sort_key(from_quarter) > quarter_sort_key(through_quarter)
+        ):
+            raise ValueError(
+                f"Manager '{manager_name}' filing source period starts after it ends."
+            )
+
+        raw_overlap_policy = raw_period.get("overlap_policy")
+        if raw_overlap_policy is None:
+            overlap_policy = None
+        elif isinstance(raw_overlap_policy, str):
+            overlap_policy = raw_overlap_policy.strip()
+        else:
+            raise ValueError(
+                f"Manager '{manager_name}' has unsupported filing source overlap policy."
+            )
+        if overlap_policy not in {None, "sum"}:
+            raise ValueError(
+                f"Manager '{manager_name}' has unsupported filing source overlap policy."
+            )
+        if len(source_ciks) > 1 and overlap_policy != "sum":
+            raise ValueError(
+                f"Manager '{manager_name}' composite filing sources require overlap_policy 'sum'."
+            )
+        if len(source_ciks) == 1 and overlap_policy is not None:
+            raise ValueError(
+                f"Manager '{manager_name}' overlap_policy is only valid for composite filing sources."
+            )
+
+        periods.append(
+            FilingSourcePeriod(
+                source_ciks=source_ciks,
+                from_quarter=from_quarter,
+                through_quarter=through_quarter,
+                overlap_policy=overlap_policy,
+            )
+        )
+
+    for index, period in enumerate(periods):
+        period_start = quarter_sort_key(period.from_quarter) if period.from_quarter else None
+        period_end = quarter_sort_key(period.through_quarter) if period.through_quarter else None
+        for other in periods[index + 1 :]:
+            other_start = quarter_sort_key(other.from_quarter) if other.from_quarter else None
+            other_end = quarter_sort_key(other.through_quarter) if other.through_quarter else None
+            starts_before_other_ends = other_end is None or period_start is None or period_start <= other_end
+            other_starts_before_period_ends = period_end is None or other_start is None or other_start <= period_end
+            if starts_before_other_ends and other_starts_before_period_ends:
+                raise ValueError(f"Manager '{manager_name}' has overlapping filing source periods.")
+
+    return tuple(periods)
+
+
 def _load_managers_from_iterable(items: Iterable[dict[str, object]]) -> list[ManagerConfig]:
     managers: list[ManagerConfig] = []
     for item in items:
@@ -106,7 +257,18 @@ def _load_managers_from_iterable(items: Iterable[dict[str, object]]) -> list[Man
 
         if weight <= 0:
             raise ValueError(f"Manager '{name}' must have 'weight' > 0.")
-        managers.append(ManagerConfig(name=name, cik=cik, weight=weight))
+        filing_source_periods = _parse_filing_source_periods(
+            item.get("filing_source_periods"),
+            manager_name=name,
+        )
+        managers.append(
+            ManagerConfig(
+                name=name,
+                cik=cik,
+                weight=weight,
+                filing_source_periods=filing_source_periods,
+            )
+        )
     return managers
 
 

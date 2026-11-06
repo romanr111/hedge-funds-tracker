@@ -20,6 +20,7 @@ class Filing:
     filing_date: str | None
     report_date: str | None
     acceptance_datetime: str | None = None
+    primary_document: str | None = None
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,17 @@ class DiffResult:
 
 
 @dataclass(frozen=True)
+class SnapshotSourceFiling:
+    """A filing used to build a canonical manager-quarter snapshot."""
+
+    source_cik: str
+    accession: str
+    source_form: str
+    filing_date: str | None
+    acceptance_datetime: str | None
+
+
+@dataclass(frozen=True)
 class ManagerQuarterSnapshot:
     cik: str
     manager_name: str
@@ -55,6 +67,24 @@ class ManagerQuarterSnapshot:
     aum_value_k: int
     positions_count: int
     updated_at: str | None = None
+    source_filings: tuple[SnapshotSourceFiling, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReportingSourceReview:
+    """An unresolved 13F reporting-source transition requiring explicit approval."""
+
+    manager_cik: str
+    manager_name: str
+    report_quarter: str
+    notice_accession: str
+    notice_filing_date: str | None
+    candidate_ciks: tuple[str, ...]
+    status: str
+    notified_at: str | None
+    created_at: str
+    updated_at: str
+    resolved_at: str | None
 
 
 @dataclass(frozen=True)

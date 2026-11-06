@@ -57,13 +57,19 @@ def notify_if_all_reports_published_for_current_quarter(
     today = now_fn().date()
     target_year, target_quarter = _previous_report_quarter(today)
     quarter_label = _quarter_label_from_year_quarter(target_year, target_quarter)
+    target_report_quarter = f"{target_year}Q{target_quarter}"
+    snapshot_reader = getattr(store, "get_manager_quarter_snapshot", None)
     for manager in managers:
-        manager_state = store.get_state(manager.cik)
-        if manager_state is None or not _is_in_target_quarter(
-            manager_state.last_report_date,
-            year=target_year,
-            quarter=target_quarter,
-        ):
+        if callable(snapshot_reader):
+            is_reported = snapshot_reader(manager.cik, target_report_quarter) is not None
+        else:
+            manager_state = store.get_state(manager.cik)
+            is_reported = manager_state is not None and _is_in_target_quarter(
+                manager_state.last_report_date,
+                year=target_year,
+                quarter=target_quarter,
+            )
+        if not is_reported:
             app_logger.info(
                 "Quarterly reports completion status",
                 extra={

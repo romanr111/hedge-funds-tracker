@@ -33,6 +33,17 @@ class TrendEngineResult:
     signals_count: int
 
 
+def _has_open_reporting_source_reviews(
+    store: object,
+    manager_ciks: list[str],
+    report_quarters: list[str] | None = None,
+) -> bool:
+    checker = getattr(store, "has_open_reporting_source_reviews", None)
+    if not callable(checker):
+        return False
+    return bool(checker(manager_ciks, report_quarters))
+
+
 
 def _fingerprint(payload: object) -> str:
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
@@ -278,6 +289,16 @@ def run_trend_engine_for_target_quarter(
         raise ValueError("compute_mode must be 'latest' or 'backfill'.")
 
     ciks = [manager.cik for manager in managers]
+    if _has_open_reporting_source_reviews(store, ciks, [target_quarter]):
+        app_logger.info(
+            "Trend engine pending: reporting source review",
+            extra={"target_quarter": target_quarter, "compute_mode": compute_mode},
+        )
+        return TrendEngineResult(
+            status="pending_reporting_source_review",
+            report_quarter=target_quarter,
+            signals_count=0,
+        )
     common_quarters = store.list_common_report_quarters(ciks)
     common_quarters = sorted(common_quarters, key=quarter_sort_key)
     if target_quarter not in common_quarters:
@@ -461,6 +482,10 @@ def run_trend_engine_for_latest_completed_quarter(
         return TrendEngineResult(status="dry_run", report_quarter=None, signals_count=0)
     if not managers:
         return TrendEngineResult(status="no_managers", report_quarter=None, signals_count=0)
+
+    if _has_open_reporting_source_reviews(store, [manager.cik for manager in managers]):
+        app_logger.info("Trend engine pending: reporting source review")
+        return TrendEngineResult(status="pending_reporting_source_review", report_quarter=None, signals_count=0)
 
     target_quarter = detect_latest_completed_report_quarter(managers, store)
     if target_quarter is None:

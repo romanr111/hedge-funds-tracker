@@ -1,21 +1,165 @@
 from __future__ import annotations
 
+import hashlib
 import logging
+from collections import defaultdict
 from collections.abc import Callable, Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timezone
 
 from signals.application.ports.notifier import NotifierPort
 from signals.application.ports.sec_gateway import SecGateway
 from signals.application.ports.state_repository import StateRepository
 from signals.domain.diffing import build_diff_message, diff_positions
 from signals.domain.exceptions import InformationTableLookupError, InvalidInformationTableError, SubmissionsFetchError
-from signals.domain.filings import extract_filings, filter_by_filing_age, is_filing_within_hours
+from signals.domain.filings import (
+    extract_filings,
+    filter_by_filing_age,
+    is_filing_within_hours,
+    parse_iso_date,
+    parse_iso_datetime,
+)
 from signals.domain.formatting import format_report_period, format_subject
-from signals.domain.models import Manager, Position
+from signals.domain.models import Filing, Manager, Position
 from signals.domain.parsing import parse_infotable
+from signals.domain.quarters import report_quarter_from_iso_date
 from signals.domain.timing import now_kyiv
+from signals.domain.trends import aggregate_positions_by_instrument
 
 RECENT_NO_CHANGE_NOTIFICATION_HOURS = 24
+
+
+@dataclass(frozen=True)
+class _FilingBatch:
+    filing: Filing
+    source_filings: tuple[tuple[str, Filing], ...]
+
+
+def _approved_source_ciks(manager: Manager, report_quarter: str) -> tuple[str, ...]:
+    resolver = getattr(manager, "source_ciks_for_quarter", None)
+    if callable(resolver):
+        source_ciks = resolver(report_quarter)
+        if isinstance(source_ciks, tuple) and source_ciks:
+            return source_ciks
+    return (manager.cik,)
+
+
+def _all_possible_source_ciks(manager: Manager) -> tuple[str, ...]:
+    source_ciks = [manager.cik]
+    for period in getattr(manager, "filing_source_periods", ()):
+        source_ciks.extend(getattr(period, "source_ciks", ()))
+    return tuple(dict.fromkeys(source_ciks))
+
+
+def _filing_recency_key(filing: Filing) -> tuple[datetime, datetime, str]:
+    acceptance = parse_iso_datetime(filing.acceptance_datetime)
+    filing_day = parse_iso_date(filing.filing_date)
+    filing_datetime = (
+        datetime.combine(filing_day, datetime.min.time(), tzinfo=timezone.utc)
+        if filing_day is not None
+        else datetime.min.replace(tzinfo=timezone.utc)
+    )
+    return (
+        acceptance or datetime.min.replace(tzinfo=timezone.utc),
+        filing_datetime,
+        filing.accession,
+    )
+
+
+def _composite_filing(source_filings: tuple[tuple[str, Filing], ...]) -> Filing:
+    representative = max((filing for _, filing in source_filings), key=_filing_recency_key)
+    payload = "|".join(
+        f"{source_cik}:{filing.accession}"
+        for source_cik, filing in sorted(source_filings, key=lambda item: item[0])
+    )
+    return Filing(
+        accession=f"composite:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}",
+        form="COMPOSITE",
+        filing_date=representative.filing_date,
+        report_date=representative.report_date,
+        acceptance_datetime=representative.acceptance_datetime,
+    )
+
+
+def _collect_filing_batches(
+    manager: Manager,
+    client: SecGateway,
+    *,
+    max_filing_age_days: int,
+    today: datetime,
+    logger: logging.Logger,
+) -> list[_FilingBatch]:
+    filings_by_source_and_quarter: dict[str, dict[str, list[Filing]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    single_source_batches: list[_FilingBatch] = []
+    composite_quarters: set[str] = set()
+
+    for source_cik in _all_possible_source_ciks(manager):
+        try:
+            submissions = client.get_submissions(source_cik)
+        except SubmissionsFetchError as exc:
+            logger.warning(
+                "Failed to fetch submissions",
+                extra={
+                    "manager": manager.name,
+                    "cik": manager.cik,
+                    "source_cik": source_cik,
+                    "error": str(exc),
+                },
+            )
+            continue
+
+        filings = filter_by_filing_age(
+            extract_filings(submissions),
+            max_filing_age_days,
+            today=today.date(),
+        )
+        for filing in filings:
+            report_quarter = report_quarter_from_iso_date(filing.report_date)
+            if report_quarter is None:
+                continue
+            approved_source_ciks = _approved_source_ciks(manager, report_quarter)
+            if source_cik not in approved_source_ciks:
+                continue
+            if len(approved_source_ciks) == 1:
+                single_source_batches.append(
+                    _FilingBatch(filing=filing, source_filings=((source_cik, filing),))
+                )
+                continue
+            filings_by_source_and_quarter[source_cik][report_quarter].append(filing)
+            composite_quarters.add(report_quarter)
+
+    composite_batches: list[_FilingBatch] = []
+    for report_quarter in composite_quarters:
+        selected_filings: list[tuple[str, Filing]] = []
+        for source_cik in _approved_source_ciks(manager, report_quarter):
+            candidates = filings_by_source_and_quarter[source_cik].get(report_quarter, [])
+            if not candidates:
+                continue
+            selected_filings.append((source_cik, max(candidates, key=_filing_recency_key)))
+        if len(selected_filings) != len(_approved_source_ciks(manager, report_quarter)):
+            logger.info(
+                "Manager status",
+                extra={
+                    "manager": manager.name,
+                    "cik": manager.cik,
+                    "status": "incomplete_composite_sources",
+                    "report_quarter": report_quarter,
+                },
+            )
+            continue
+        source_filings = tuple(selected_filings)
+        composite_batches.append(
+            _FilingBatch(
+                filing=_composite_filing(source_filings),
+                source_filings=source_filings,
+            )
+        )
+
+    batches = single_source_batches + composite_batches
+    batches.sort(key=lambda item: _filing_recency_key(item.filing), reverse=True)
+    return batches
 
 
 def _send_notifications(notifiers: Sequence[NotifierPort], subject: str, body: str) -> None:
@@ -45,44 +189,35 @@ def process_manager(
     logger: logging.Logger | None = None,
 ) -> None:
     app_logger = logger or logging.getLogger(__name__)
-    try:
-        submissions = client.get_submissions(manager.cik)
-    except SubmissionsFetchError as exc:
-        app_logger.warning(
-            "Failed to fetch submissions",
-            extra={"manager": manager.name, "cik": manager.cik, "error": str(exc)},
-        )
-        return
-    filings = extract_filings(submissions)
-    if not filings:
+    filing_batches = _collect_filing_batches(
+        manager,
+        client,
+        max_filing_age_days=max_filing_age_days,
+        today=now_fn(),
+        logger=app_logger,
+    )
+    if not filing_batches:
         app_logger.info("Manager status", extra={"manager": manager.name, "cik": manager.cik, "status": "no_filings"})
-        return
-    filings = filter_by_filing_age(filings, max_filing_age_days, today=now_fn().date())
-    if not filings:
-        app_logger.info(
-            "Manager status",
-            extra={"manager": manager.name, "cik": manager.cik, "status": "no_recent_filings"},
-        )
         return
 
     state = store.get_state(manager.cik)
     last_accession = state.last_accession if state else None
     last_notified_accession = state.last_notified_accession if state else None
-    new_filings = []
+    new_filing_batches: list[_FilingBatch] = []
 
     if state is None:
         # Initial run: seed baseline from the latest filing only, avoid historical backfill spam.
-        new_filings = filings[:1]
+        new_filing_batches = filing_batches[:1]
     else:
-        for filing in filings:
-            if last_accession and filing.accession == last_accession:
+        for filing_batch in filing_batches:
+            if last_accession and filing_batch.filing.accession == last_accession:
                 break
-            new_filings.append(filing)
+            new_filing_batches.append(filing_batch)
 
-    if not new_filings:
+    if not new_filing_batches:
         app_logger.info("Manager status", extra={"manager": manager.name, "cik": manager.cik, "status": "no_new_filings"})
-        if state is not None and last_accession and filings:
-            latest_filing = filings[0]
+        if state is not None and last_accession and filing_batches:
+            latest_filing = filing_batches[0].filing
             should_notify_existing_filing = (
                 latest_filing.accession == last_accession
                 and last_notified_accession != latest_filing.accession
@@ -107,18 +242,35 @@ def process_manager(
     previous_positions = state.last_positions if state else None
 
     # Process oldest-to-newest so diffs are deterministic.
-    for filing in reversed(new_filings):
+    for filing_batch in reversed(new_filing_batches):
+        filing = filing_batch.filing
         notified_for_filing = False
-        try:
-            info_url = client.find_information_table_url(manager.cik, filing.accession)
-            xml_text = client.get_text(info_url)
-            positions = parse_infotable_fn(xml_text)
-        except (InformationTableLookupError, InvalidInformationTableError) as exc:
-            app_logger.warning(
-                "Skipping accession due to fetch/parse error",
-                extra={"manager": manager.name, "cik": manager.cik, "accession": filing.accession, "error": str(exc)},
-            )
+        raw_positions: list[Position] = []
+        failed_source: str | None = None
+        for source_cik, source_filing in filing_batch.source_filings:
+            try:
+                info_url = client.find_information_table_url(source_cik, source_filing.accession)
+                raw_positions.extend(parse_infotable_fn(client.get_text(info_url)))
+            except (InformationTableLookupError, InvalidInformationTableError) as exc:
+                failed_source = source_cik
+                app_logger.warning(
+                    "Skipping accession due to fetch/parse error",
+                    extra={
+                        "manager": manager.name,
+                        "cik": manager.cik,
+                        "source_cik": source_cik,
+                        "accession": source_filing.accession,
+                        "error": str(exc),
+                    },
+                )
+                break
+        if failed_source is not None:
             continue
+        positions = (
+            raw_positions
+            if len(filing_batch.source_filings) == 1
+            else aggregate_positions_by_instrument(raw_positions)
+        )
 
         if not previous_positions:
             if notify_initial:
