@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -9,6 +8,11 @@ from typing import Protocol
 
 from signals.application.ports.sec_gateway import SecGateway
 from signals.domain.exceptions import InformationTableLookupError, InvalidInformationTableError, SubmissionsFetchError
+from signals.domain.filing_sources import (
+    all_possible_source_ciks,
+    approved_source_ciks,
+    composite_accession,
+)
 from signals.domain.filings import (
     NOTICE_FORMS,
     extract_13f_notice_other_manager_ciks,
@@ -47,30 +51,6 @@ def _filing_recency_key(
         filing_dt,
         accession,
     )
-
-
-def _approved_source_ciks(manager: _ManagerLike, report_quarter: str) -> tuple[str, ...]:
-    resolver = getattr(manager, "source_ciks_for_quarter", None)
-    if callable(resolver):
-        source_ciks = resolver(report_quarter)
-        if isinstance(source_ciks, tuple) and source_ciks:
-            return source_ciks
-    return (manager.cik,)
-
-
-def _all_possible_source_ciks(manager: _ManagerLike) -> tuple[str, ...]:
-    source_ciks = [manager.cik]
-    for period in getattr(manager, "filing_source_periods", ()):
-        source_ciks.extend(getattr(period, "source_ciks", ()))
-    return tuple(dict.fromkeys(source_ciks))
-
-
-def _composite_accession(selected_filings: Sequence[tuple[str, Filing]]) -> str:
-    payload = "|".join(
-        f"{source_cik}:{filing.accession}"
-        for source_cik, filing in sorted(selected_filings, key=lambda item: item[0])
-    )
-    return f"composite:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
 
 def _notice_candidate_ciks(
@@ -140,7 +120,7 @@ def sync_quarter_snapshots(
         )
 
         submissions_by_cik: dict[str, dict[str, object]] = {}
-        for source_cik in _all_possible_source_ciks(manager):
+        for source_cik in all_possible_source_ciks(manager):
             try:
                 submissions_by_cik[source_cik] = client.get_all_submissions(source_cik)
             except SubmissionsFetchError as exc:
@@ -166,7 +146,7 @@ def sync_quarter_snapshots(
             filings = filter_by_filing_age(extract_filings(submissions), max_filing_age_days, today=today)
             for filing in filings:
                 report_quarter = report_quarter_from_iso_date(filing.report_date)
-                if report_quarter is None or source_cik not in _approved_source_ciks(manager, report_quarter):
+                if report_quarter is None or source_cik not in approved_source_ciks(manager, report_quarter):
                     continue
                 filings_by_source_and_quarter[source_cik][report_quarter].append(filing)
                 candidate_quarters.add(report_quarter)
@@ -188,7 +168,7 @@ def sync_quarter_snapshots(
         selected_quarters = sorted(candidate_quarters, key=quarter_sort_key, reverse=True)[:max_quarters]
         manager_upserted_rows = 0
         for report_quarter in selected_quarters:
-            expected_source_ciks = _approved_source_ciks(manager, report_quarter)
+            expected_source_ciks = approved_source_ciks(manager, report_quarter)
             selected_filings: list[tuple[str, Filing]] = []
             for source_cik in expected_source_ciks:
                 candidates = filings_by_source_and_quarter[source_cik].get(report_quarter, [])
@@ -279,7 +259,7 @@ def sync_quarter_snapshots(
             accession = (
                 selected_filings[0][1].accession
                 if len(selected_filings) == 1
-                else _composite_accession(selected_filings)
+                else composite_accession(selected_filings)
             )
             source_form = selected_filings[0][1].form if len(selected_filings) == 1 else "COMPOSITE"
             aum_value_k = sum(

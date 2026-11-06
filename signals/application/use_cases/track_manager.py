@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from collections import defaultdict
 from collections.abc import Callable, Sequence
@@ -12,6 +11,11 @@ from signals.application.ports.sec_gateway import SecGateway
 from signals.application.ports.state_repository import StateRepository
 from signals.domain.diffing import build_diff_message, diff_positions
 from signals.domain.exceptions import InformationTableLookupError, InvalidInformationTableError, SubmissionsFetchError
+from signals.domain.filing_sources import (
+    all_possible_source_ciks,
+    approved_source_ciks,
+    composite_accession,
+)
 from signals.domain.filings import (
     extract_filings,
     filter_by_filing_age,
@@ -35,22 +39,6 @@ class _FilingBatch:
     source_filings: tuple[tuple[str, Filing], ...]
 
 
-def _approved_source_ciks(manager: Manager, report_quarter: str) -> tuple[str, ...]:
-    resolver = getattr(manager, "source_ciks_for_quarter", None)
-    if callable(resolver):
-        source_ciks = resolver(report_quarter)
-        if isinstance(source_ciks, tuple) and source_ciks:
-            return source_ciks
-    return (manager.cik,)
-
-
-def _all_possible_source_ciks(manager: Manager) -> tuple[str, ...]:
-    source_ciks = [manager.cik]
-    for period in getattr(manager, "filing_source_periods", ()):
-        source_ciks.extend(getattr(period, "source_ciks", ()))
-    return tuple(dict.fromkeys(source_ciks))
-
-
 def _filing_recency_key(filing: Filing) -> tuple[datetime, datetime, str]:
     acceptance = parse_iso_datetime(filing.acceptance_datetime)
     filing_day = parse_iso_date(filing.filing_date)
@@ -68,12 +56,8 @@ def _filing_recency_key(filing: Filing) -> tuple[datetime, datetime, str]:
 
 def _composite_filing(source_filings: tuple[tuple[str, Filing], ...]) -> Filing:
     representative = max((filing for _, filing in source_filings), key=_filing_recency_key)
-    payload = "|".join(
-        f"{source_cik}:{filing.accession}"
-        for source_cik, filing in sorted(source_filings, key=lambda item: item[0])
-    )
     return Filing(
-        accession=f"composite:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}",
+        accession=composite_accession(source_filings),
         form="COMPOSITE",
         filing_date=representative.filing_date,
         report_date=representative.report_date,
@@ -95,7 +79,7 @@ def _collect_filing_batches(
     single_source_batches: list[_FilingBatch] = []
     composite_quarters: set[str] = set()
 
-    for source_cik in _all_possible_source_ciks(manager):
+    for source_cik in all_possible_source_ciks(manager):
         try:
             submissions = client.get_submissions(source_cik)
         except SubmissionsFetchError as exc:
@@ -119,10 +103,10 @@ def _collect_filing_batches(
             report_quarter = report_quarter_from_iso_date(filing.report_date)
             if report_quarter is None:
                 continue
-            approved_source_ciks = _approved_source_ciks(manager, report_quarter)
-            if source_cik not in approved_source_ciks:
+            expected_source_ciks = approved_source_ciks(manager, report_quarter)
+            if source_cik not in expected_source_ciks:
                 continue
-            if len(approved_source_ciks) == 1:
+            if len(expected_source_ciks) == 1:
                 single_source_batches.append(
                     _FilingBatch(filing=filing, source_filings=((source_cik, filing),))
                 )
@@ -133,12 +117,12 @@ def _collect_filing_batches(
     composite_batches: list[_FilingBatch] = []
     for report_quarter in composite_quarters:
         selected_filings: list[tuple[str, Filing]] = []
-        for source_cik in _approved_source_ciks(manager, report_quarter):
+        for source_cik in approved_source_ciks(manager, report_quarter):
             candidates = filings_by_source_and_quarter[source_cik].get(report_quarter, [])
             if not candidates:
                 continue
             selected_filings.append((source_cik, max(candidates, key=_filing_recency_key)))
-        if len(selected_filings) != len(_approved_source_ciks(manager, report_quarter)):
+        if len(selected_filings) != len(approved_source_ciks(manager, report_quarter)):
             logger.info(
                 "Manager status",
                 extra={
