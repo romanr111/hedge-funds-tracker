@@ -69,3 +69,54 @@ def test_load_managers_rejects_non_string_filing_source_overlap_policy() -> None
                 }
             ]""",
         )
+
+
+def test_load_managers_rejects_overlapping_filing_source_periods() -> None:
+    with pytest.raises(ValueError, match="overlapping filing source periods"):
+        load_managers(
+            None,
+            """[
+                {
+                    "name": "Fund A",
+                    "cik": "0000000001",
+                    "weight": 1,
+                    "filing_source_periods": [
+                        {
+                            "through_quarter": "2026Q2",
+                            "source_ciks": ["0000000001"]
+                        },
+                        {
+                            "from_quarter": "2026Q2",
+                            "source_ciks": ["0000000002"]
+                        }
+                    ]
+                }
+            ]""",
+        )
+
+
+def test_load_managers_accepts_adjacent_filing_source_periods() -> None:
+    managers = load_managers(
+        None,
+        """[
+            {
+                "name": "Fund A",
+                "cik": "0000000001",
+                "weight": 1,
+                "filing_source_periods": [
+                    {
+                        "through_quarter": "2026Q1",
+                        "source_ciks": ["0000000001"]
+                    },
+                    {
+                        "from_quarter": "2026Q2",
+                        "source_ciks": ["0000000002"]
+                    }
+                ]
+            }
+        ]""",
+    )
+
+    assert len(managers) == 1
+    assert managers[0].source_ciks_for_quarter("2026Q1") == ("0000000001",)
+    assert managers[0].source_ciks_for_quarter("2026Q2") == ("0000000002",)
