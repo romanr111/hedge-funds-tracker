@@ -31,21 +31,11 @@ The project follows a layered architecture (ports-and-adapters / clean architect
 
 ## Agent Tooling
 
-This repo configures **CodeGraph** and **Headroom** to help agents navigate and summarize the codebase.
-
-- **CodeGraph** (`codegraph`) — symbol/file/flow lookup and cross-reference queries.
-  - Version: `0.9.9`.
-  - Registered as an MCP server in [`.mcp.json`](.mcp.json): `codegraph serve --mcp`.
-  - Repo-local recipes in the [`justfile`](justfile):
-    - `just graph-bootstrap` — initialize CodeGraph for this worktree (enforces local DB ownership).
-    - `just graph-status` — show index status.
-    - `just graph-sync` — sync incremental changes.
-    - `just graph-reindex` — rebuild the full index.
-  - Isolation guard: [`scripts/codegraph-bootstrap.sh`](scripts/codegraph-bootstrap.sh) writes a `.codegraph/worktree-root` owner marker so a `.codegraph/` directory copied from another worktree is rejected. New worktrees must run `just graph-bootstrap` first.
+This repo uses **Headroom** as the primary context-optimization layer for bulky/noisy outputs: build logs, test output, simulator logs, crash logs, JSON, verbose diagnostics, and large diffs.
 
 - **Headroom** (`headroom`) — primary context-optimization layer for bulky/noisy outputs: build logs, test output, simulator logs, crash logs, JSON, verbose diagnostics, and large diffs.
   - Version: `0.24.0`.
-  - No repo-local Headroom MCP entry exists in `.mcp.json`; this file is CodeGraph-only. If your agent already has a user-managed Headroom MCP config, keep using it.
+  - If your agent already has a user-managed Headroom MCP config, keep using it.
 
 ## Project Structure
 
