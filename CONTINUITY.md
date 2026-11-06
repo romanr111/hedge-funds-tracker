@@ -58,6 +58,7 @@ Before Git mutations, reconcile the ledger with actual worktree, branch, and sta
 
 ## Receipts
 
+- 2026-11-06: PR #41 review fixes (F1+F4): composite-source helpers centralized in `signals/domain/filing_sources.py` (34f229b); 13 seam tests added (891fd4d, 4 files); full suite 234 passed in 1005.92s on the branch.
 - 2026-11-06: origin/main ran 50 DB-chore commits plus workflow/`.gitignore`/test changes ahead of local `main` (e8c81bd); branch was created from 8ccb1a7, not the stale local tip.
 - 2026-11-06: Draft PR #41 opened: https://github.com/romanr111/hedge-funds-tracker/pull/41 (verified OPEN/draft, base main). Commits: 75354db chore codegraph, 7c47cb8 feat reporting-source, dfb8255 ledger.
 - 2026-11-06: `pytest -q`: 220 passed in 166.86s on the pre-rebase tree; on the branch base: 221 passed in 1012.16s (slow run under concurrent subagent load).
