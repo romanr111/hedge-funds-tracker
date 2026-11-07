@@ -460,11 +460,18 @@ def test_chart_added_once_and_only_on_first_content() -> None:
     assert create_args[create_args.index("--sheet") + 1] == TAB_HISTORY_UK
     assert create_args[create_args.index("--anchor") + 1] == "I2"
     # The spec is the verified basicChart line chart over the history tab.
+    # ChartData lives behind the domain/series wrappers (Sheets API rejects
+    # a bare source/sourceRange item with `ChartData.sourceRange must be set`).
     spec = client.chart_specs[0]
     assert spec["title"] == CHART_TITLE_UK
     assert spec["basicChart"]["chartType"] == "LINE"
     assert len(spec["basicChart"]["series"]) == len(MODULE_KEYS)
-    assert spec["basicChart"]["domains"][0]["source"]["startColumnIndex"] == 0
+    domain = spec["basicChart"]["domains"][0]
+    sources = domain["domain"]["sourceRange"]["sources"]
+    assert sources[0]["startColumnIndex"] == 0
+    for series_item in spec["basicChart"]["series"]:
+        series_sources = series_item["series"]["sourceRange"]["sources"]
+        assert series_sources[0]["startColumnIndex"] >= 1
 
     second = _publish(store, client)
     assert second.status == "skipped_unchanged"

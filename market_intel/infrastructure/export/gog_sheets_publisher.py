@@ -185,13 +185,23 @@ class GogSheetsPublisher:
             tmp_path = Path(tmp_dir)
             tab_names = [tab.name for tab in spec.tabs]
             if created_now:
+                # Add the spec tabs FIRST: a fresh document contains only the
+                # default tab, and the Drive API refuses to delete the last
+                # remaining sheet (`Invalid requests[0].deleteSheet ... remove
+                # all the sheets`), so removal must come after the additions.
+                self._add_missing_tabs(spreadsheet_id, spec.tabs, tab_titles)
                 self._remove_default_tabs(
                     spreadsheet_id, tab_titles, keep=tab_names
                 )
             elif reset_sheet:
                 self._delete_spec_tabs(spreadsheet_id, spec.tabs, tab_titles)
                 tab_titles = [t for t in tab_titles if t not in tab_names]
-            self._add_missing_tabs(spreadsheet_id, spec.tabs, tab_titles)
+                self._add_missing_tabs(spreadsheet_id, spec.tabs, tab_titles)
+                self._remove_default_tabs(
+                    spreadsheet_id, tab_titles, keep=tab_names
+                )
+            else:
+                self._add_missing_tabs(spreadsheet_id, spec.tabs, tab_titles)
 
             self._write_tab_data(spreadsheet_id, spec.tabs, tmp_path)
             self._apply_tab_formats(spreadsheet_id, spec.tabs)
@@ -525,33 +535,34 @@ class GogSheetsPublisher:
 
         series_count = len(history_tab.cell_ops[0].values[0]) - 1
         end_row = 1 + data_row_count
-        chart_spec: dict[str, Any] = {
-            "title": chart.title,
-            "basicChart": {
-                "chartType": "LINE",
-                "legendPosition": "BOTTOM_LEGEND",
-                "headerCount": 1,
-                "domains": [
-                    {
-                        "source": {
-                            "sheetId": sheet_id,
-                            "startColumnIndex": 0,
-                            "endColumnIndex": 1,
-                            "startRowIndex": 1,
-                            "endRowIndex": end_row,
-                        }
-                    }
-                ],
-                "series": [
-                    {
-                        "source": {
+
+        def _chart_data(column: int) -> dict[str, Any]:
+            return {
+                "sourceRange": {
+                    "sources": [
+                        {
                             "sheetId": sheet_id,
                             "startColumnIndex": column,
                             "endColumnIndex": column + 1,
                             "startRowIndex": 1,
                             "endRowIndex": end_row,
                         }
-                    }
+                    ]
+                }
+            }
+
+        # ChartData is wrapped: BasicChartDomain.domain / BasicChartSeries
+        # .series. A bare `source` or `sourceRange` inside the item is
+        # rejected by the Sheets API (`ChartData.sourceRange must be set`).
+        chart_spec: dict[str, Any] = {
+            "title": chart.title,
+            "basicChart": {
+                "chartType": "LINE",
+                "legendPosition": "BOTTOM_LEGEND",
+                "headerCount": 1,
+                "domains": [{"domain": _chart_data(0)}],
+                "series": [
+                    {"series": _chart_data(column)}
                     for column in range(1, series_count + 1)
                 ],
             },
