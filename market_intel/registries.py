@@ -271,6 +271,7 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         band_ref="erp",
         weight=1.0,
         module_key="valuation",
+        invert=True,
         params={
             "url": "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/histimpl.html",
             # histimpl.html is the annual implied ERP table (the older
@@ -302,6 +303,17 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         module_key="sentiment",
         params={"vix": "vix", "vix3m": "vix3m"},
     ),
+    "margin_yoy": SeriesSpec(
+        key="margin_yoy",
+        title_uk="Маржинальна заборгованість: річна зміна",
+        source="computed",
+        freq="monthly",
+        staleness_days=35,
+        band_ref="margin_yoy",
+        weight=0.25,
+        module_key="sentiment",
+        params={"margin_debt": "margin_debt"},
+    ),
     "claims_yoy": SeriesSpec(
         key="claims_yoy",
         title_uk="Заявки на допомогу: річна зміна",
@@ -312,6 +324,17 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         weight=0.20,
         module_key="macro",
         params={"icsa": "icsa"},
+    ),
+    "netliq_tbn": SeriesSpec(
+        key="netliq_tbn",
+        title_uk="Нетто-ліквідність (WALCL - RRP - TGA)",
+        source="computed",
+        freq="weekly",
+        staleness_days=8,
+        band_ref=None,
+        weight=None,
+        module_key=None,
+        params={"walcl": "walcl", "rrp": "rrpontsyd", "tga": "wregen"},
     ),
     "netliq_yoy": SeriesSpec(
         key="netliq_yoy",

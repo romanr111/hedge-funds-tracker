@@ -31,6 +31,7 @@ EXPECTED_WEIGHTS_BY_KEY = {
     "forward_pe": 1.0,
     "erp": 1.0,
     "vix_vix3m": 0.10,
+    "margin_yoy": 0.25,
     "claims_yoy": 0.20,
     "netliq_yoy": 0.10,
     "sofr_iorb": 0.15,
@@ -44,7 +45,7 @@ EXPECTED_WEIGHTS_BY_KEY = {
 EXPECTED_MODULE_WEIGHT_TOTALS = {
     "credit": 0.85,
     "macro": 0.90,
-    "sentiment": 0.55,
+    "sentiment": 0.80,
     "technique": 1.0,
     "valuation": 4.0,
 }
@@ -55,10 +56,10 @@ INPUT_ONLY_KEYS = {
     "margin_debt",
 }
 COMPUTED_BANDED_KEYS = {
-    "ecy", "vix_vix3m", "claims_yoy", "netliq_yoy", "sofr_iorb",
+    "ecy", "vix_vix3m", "margin_yoy", "claims_yoy", "netliq_yoy", "sofr_iorb",
     "hy_change_6m", "pct_200dma", "drawdown_2y", "weekly_rsi", "buffett_z1",
 }
-INVERTED_KEYS = {"vix", "netliq_yoy"}
+INVERTED_KEYS = {"vix", "netliq_yoy", "erp"}
 
 EXPECTED_MODULE_BY_KEY = {
     "hy_oas": "credit",
@@ -74,6 +75,7 @@ EXPECTED_MODULE_BY_KEY = {
     "vix": "sentiment",
     "fg": "sentiment",
     "vix_vix3m": "sentiment",
+    "margin_yoy": "sentiment",
     "cape": "valuation",
     "forward_pe": "valuation",
     "erp": "valuation",
@@ -147,11 +149,13 @@ def test_computed_specs_reference_input_keys() -> None:
         assert spec.params, f"computed spec {key} must reference its inputs"
     expected_params = {
         "ecy": {"cape": "cape", "real_10y": "real_10y"},
+        "vix_vix3m": {"vix": "vix", "vix3m": "vix3m"},
+        "margin_yoy": {"margin_debt": "margin_debt"},
+        "netliq_tbn": {"walcl": "walcl", "rrp": "rrpontsyd", "tga": "wregen"},
         "netliq_yoy": {"walcl": "walcl", "rrp": "rrpontsyd", "tga": "wregen"},
         "sofr_iorb": {"sofr": "sofr", "iorb": "iorb"},
         "hy_change_6m": {"hy": "hy_oas"},
         "claims_yoy": {"icsa": "icsa"},
-        "vix_vix3m": {"vix": "vix", "vix3m": "vix3m"},
         "buffett_z1": {"equities": "ncbeilq027s", "gdp": "gdp"},
         "pct_200dma": {"market": "spx"},
         "drawdown_2y": {"market": "spx"},

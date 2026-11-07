@@ -122,7 +122,7 @@ _UNITS_BY_KEY: Mapping[str, str] = {
     "pct_200dma": "%",
     "drawdown_2y": "%",
     "nfci": "",
-    "curve": "%",
+    "curve_3m": "%",
     "claims_yoy": "%",
     "real_10y": "%",
     "netliq_yoy": "%",

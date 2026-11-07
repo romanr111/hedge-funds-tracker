@@ -121,20 +121,23 @@ class YahooChartGateway(HttpGatewayBase):
                 "yahoo_breaker_serving_empty",
                 extra={"symbol": symbol, "note": "Yahoo rate limit: breaker open; no further network this run"},
             )
-            return self._observations(symbol, cached, now_utc=now_utc)
+            return self._observations(spec.key, cached, now_utc=now_utc)
 
         payload = self._get_symbol_payload(symbol)
         points = parse_chart_json(payload, now_utc=now_utc)
         self._consecutive_rate_limited = 0
         self._chart_cache[symbol] = points
-        return self._observations(symbol, points, now_utc=now_utc)
+        return self._observations(spec.key, points, now_utc=now_utc)
 
     def _observations(
-        self, symbol: str, points: list[tuple[datetime, float]], *, now_utc: datetime
+        self, spec_key: str, points: list[tuple[datetime, float]], *, now_utc: datetime
     ) -> list[SeriesObservation]:
+        # Observations are stored under the registry key (spx, vix3m), not the
+        # Yahoo symbol: compute_dashboard reads by spec.key only, so a symbol
+        # series_id would leave the fetched history unreadable by design.
         return [
             SeriesObservation(
-                series_id=symbol,
+                series_id=spec_key,
                 obs_date=bar_time.date(),
                 value=close,
                 source="yahoo",

@@ -205,6 +205,8 @@ def test_yahoo_gateway_parses_fixture_dropping_incomplete_last_bar() -> None:
         (date(2025, 1, 2), 100.5),
         (date(2025, 1, 6), 101.25),
     ]
+    # Observations must land under the registry key, not the Yahoo symbol.
+    assert {o.series_id for o in observations} == {"spx"}
 
 
 def test_yahoo_gateway_keeps_last_bar_after_market_close() -> None:
@@ -256,7 +258,9 @@ def test_yahoo_gateway_rejects_bad_payload_shape_and_missing_symbol() -> None:
 def test_yahoo_gateway_encodes_symbol_in_path() -> None:
     session = _FakeSession([_FakeResponse(_fixture("yahoo_chart.json"))])
     gateway = YahooChartGateway(session=session, min_interval_seconds=0.0)
-    gateway.fetch(_spec("vix3m"), now_utc=_utc(2025, 1, 7, 22, 30))
+    observations = gateway.fetch(_spec("vix3m"), now_utc=_utc(2025, 1, 7, 22, 30))
+    # Registry key != Yahoo symbol (^VIX3M): the stored series id is spec.key.
+    assert {o.series_id for o in observations} == {"vix3m"}
     assert session.calls[0]["url"].endswith("/chart/%5EVIX3M")
     assert session.calls[0]["params"] == {"range": "5y", "interval": "1d"}
 
