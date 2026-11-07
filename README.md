@@ -337,3 +337,48 @@ Final signal:
 - thresholds are confidence + regime based (see `signals/interfaces/cli/main.py`).
 - recommended compact row:
   - `Ticker | Action | Setup (Regime) | Conviction / Target | Trend | Consensus (+/-) | Data Fresh`
+
+## Market Intel (`market_intel`)
+
+A second CLI in this repo (not part of the `signals` pipeline): a 5-module US
+market intelligence snapshot for a non-professional reader - valuation,
+sentiment, technique, macro/liquidity, credit - published as a native Google
+Spreadsheet via the `gog` CLI. Design and evidence base:
+`reports/2026-11-06-market-intelligence-research-uk.md`.
+
+```bash
+# Full run: collect fresh data, compute the dashboard, publish to Drive
+python -m market_intel
+
+# Collect + compute, no spreadsheet publish
+python -m market_intel --no-publish
+
+# No DB writes and no publish (throwaway temp store)
+python -m market_intel --dry-run
+
+# Detailed per-module indicator tables (collection happens, publish does not)
+python -m market_intel --show
+
+# Rebuild the sheet tabs from scratch (bypasses the unchanged-content skip)
+python -m market_intel --reset-sheet
+
+# Exclude a fragile source for a run (sheet shows it as missing, composites renormalize)
+python -m market_intel --skip-source cnn_fg
+```
+
+Environment keys (see `config/.env.example`): `MARKET_INTEL_DB_PATH` (default
+`data/local/market_intel.sqlite3`), `SHEETS_SPREADSHEET_ID` (pin an existing
+sheet; otherwise one is created once and its id is persisted in the store),
+`SHEETS_FOLDER_ID` (optional Drive parent folder), and politeness intervals
+`MARKET_INTEL_FRED_INTERVAL` / `MARKET_INTEL_YAHOO_INTERVAL` /
+`MARKET_INTEL_HTTP_INTERVAL`. Publishing requires an authenticated `gog`
+binary; when it is missing the run still succeeds and reports
+`skipped_no_gog`.
+
+Known MVP limitations: Yahoo Finance blocks this machine's egress (HTTP 429)
+and FINRA sits behind a Cloudflare challenge (HTTP 403), so those feeds miss
+and the technique module shows "Недоступно" until the block lifts; a dead
+source never fails the run. Damodaran implied ERP comes from the annual
+histimpl table. The system does not predict market direction: it maps current
+conditions to historical forward-return distributions with explicit
+uncertainty, and provides no financial advice.
