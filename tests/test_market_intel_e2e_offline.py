@@ -30,6 +30,8 @@ from market_intel.domain.models import (
     SeriesObservation,
     SeriesSnapshot,
     SeriesSpec,
+    Skip,
+    SKIP_MANUAL,
 )
 from market_intel.infrastructure.export.gog_client import GogOutcome
 from market_intel.infrastructure.export.gog_sheets_publisher import (
@@ -249,10 +251,10 @@ class _ScriptedFetcher:
 
 def fake_collect_vintages(store: Any, fetchers: Any, series_specs: Any, *, skip_sources: Any = (), now_utc: Any = None) -> CollectionResult:
     fetched: list[str] = []
-    skipped: list[tuple[str, str]] = []
+    skipped: list[Skip] = []
     for spec in series_specs.values():
         if spec.source in skip_sources:
-            skipped.append((spec.key, f"user skip: {spec.source}"))
+            skipped.append(Skip(key=spec.key, code=SKIP_MANUAL, detail=f"user skip: {spec.source}"))
             continue
         observations = fetchers[spec.source].fetch(spec, now_utc=now_utc)
         store.append_observations(observations)

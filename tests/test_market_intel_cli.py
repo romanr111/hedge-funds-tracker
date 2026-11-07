@@ -13,12 +13,15 @@ import pytest
 from market_intel.config import MarketIntelConfig
 from market_intel.domain.exceptions import MarketIntelError, MarketIntelPublishError
 from market_intel.domain.models import (
+    SKIP_COMPUTED,
+    SKIP_SOURCE_ERROR,
     CollectionResult,
     DashboardSnapshot,
     ModuleGauge,
     PublishResult,
     RunResult,
     SeriesSnapshot,
+    Skip,
 )
 
 cli_main_module = importlib.import_module("market_intel.interfaces.cli.main")
@@ -111,7 +114,7 @@ def _dashboard() -> DashboardSnapshot:
 def _run_result(
     *,
     fetched: tuple[str, ...] = ("fred",),
-    skipped: tuple[tuple[str, str], ...] = (),
+    skipped: tuple[Skip, ...] = (),
     errors: tuple[str, ...] = (),
     publish: PublishResult | None = None,
 ) -> RunResult:
@@ -324,7 +327,9 @@ def test_cli_all_sources_failed_returns_two(
         tmp_path,
         args=_args(),
         run_result=_run_result(
-            fetched=(), skipped=(("fred", "fetch-failed"),), publish=None
+            fetched=(),
+            skipped=(Skip("fred", SKIP_SOURCE_ERROR, "HTTP 502 for upstream"),),
+            publish=None,
         ),
     )
 
@@ -341,7 +346,9 @@ def test_cli_computed_skips_do_not_count_as_failure(
         monkeypatch,
         tmp_path,
         args=_args(),
-        run_result=_run_result(fetched=(), skipped=(("derived", "computed"),)),
+        run_result=_run_result(
+            fetched=(), skipped=(Skip("derived", SKIP_COMPUTED, "обчислюється пізніше"),)
+        ),
     )
 
     assert cli_main_module._main(logging.getLogger("test")) == 0

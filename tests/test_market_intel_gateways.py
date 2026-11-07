@@ -12,7 +12,16 @@ import market_intel.infrastructure.factset_gateway as factset_module
 import market_intel.infrastructure.http_base as http_base
 from market_intel.application.use_cases.collect_vintages import collect_vintages
 from market_intel.domain.exceptions import CollectorError
-from market_intel.domain.models import CollectionResult, SeriesObservation, SeriesSpec
+from market_intel.domain.models import (
+    SKIP_COMPUTED,
+    SKIP_INTERNAL,
+    SKIP_MANUAL,
+    SKIP_SOURCE_ERROR,
+    CollectionResult,
+    SeriesObservation,
+    SeriesSpec,
+    Skip,
+)
 from market_intel.infrastructure.cnn_gateway import CnnFgGateway
 from market_intel.infrastructure.damodaran_gateway import DamodaranGateway
 from market_intel.infrastructure.factset_gateway import FactsetGateway
@@ -603,10 +612,12 @@ def test_collect_vintages_routes_sources_and_skips() -> None:
 
     assert isinstance(result, CollectionResult)
     assert result.fetched == ("cape", "hy_oas", "nfci")
-    by_key = dict(result.skipped)
-    assert by_key["fg"] == "джерело вимкнено вручну"  # source cnn_fg disabled
-    assert by_key["ecy"] == "обчислюється пізніше"
-    assert by_key["pct_200dma"] == "обчислюється пізніше"
+    by_key = {skip.key: skip for skip in result.skipped}
+    assert by_key["fg"].code == SKIP_MANUAL  # source cnn_fg disabled
+    assert by_key["fg"].detail == "джерело вимкнено вручну"
+    assert by_key["ecy"].code == SKIP_COMPUTED
+    assert by_key["pct_200dma"].code == SKIP_COMPUTED
+    assert by_key["pct_200dma"].detail == "обчислюється пізніше"
     assert "nfci" not in by_key  # fred adapter exists for nfci
     assert result.errors == ()
     assert sorted(o.series_id for o in store.appended) == ["cape", "hy_oas", "nfci"]
@@ -635,7 +646,9 @@ def test_collect_vintages_isolates_collector_errors() -> None:
         now_utc=_utc(2026, 11, 7, 7),
     )
     assert result.fetched == ("cape",)
-    assert dict(result.skipped)["hy_oas"] == "HTTP 502 for upstream"
+    skip = next(s for s in result.skipped if s.key == "hy_oas")
+    assert skip.code == SKIP_SOURCE_ERROR
+    assert skip.detail == "HTTP 502 for upstream"  # CollectorError text rides in detail
     assert result.errors == ()
     assert [o.series_id for o in store.appended] == ["cape"]
 
@@ -651,4 +664,7 @@ def test_collect_vintages_records_unexpected_crashes_in_errors() -> None:
     )
     assert result.fetched == ()
     assert result.errors == ("cape: RuntimeError('boom')",)
-    assert dict(result.skipped)["cape"]
+    [skip] = result.skipped
+    assert skip.key == "cape"
+    assert skip.code == SKIP_INTERNAL
+    assert skip.detail == "помилка виконання зібрання (див. errors)"

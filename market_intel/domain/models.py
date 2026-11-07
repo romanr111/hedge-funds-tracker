@@ -161,12 +161,32 @@ class DashboardSnapshot:
     warnings_uk: tuple[str, ...]
 
 
+# Structured skip codes for the CLI exit ladder (see Skip / CollectionResult).
+# manual / computed / no_adapter are benign: none of them is an upstream fetch
+# failure, so they never trigger the all-sources-failed exit. source_error and
+# internal always count as an unhandled skip.
+SKIP_MANUAL: Final[str] = "manual"
+SKIP_COMPUTED: Final[str] = "computed"
+SKIP_NO_ADAPTER: Final[str] = "no_adapter"
+SKIP_SOURCE_ERROR: Final[str] = "source_error"
+SKIP_INTERNAL: Final[str] = "internal"
+
+
+@dataclass(frozen=True)
+class Skip:
+    """One series skipped during collection with a machine-readable code."""
+
+    key: str
+    code: str
+    detail: str
+
+
 @dataclass(frozen=True)
 class CollectionResult:
     """Outcome of collecting vintages from all fetchers."""
 
     fetched: tuple[str, ...]
-    skipped: tuple[tuple[str, str], ...]
+    skipped: tuple[Skip, ...]
     errors: tuple[str, ...]
 
 

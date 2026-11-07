@@ -13,6 +13,9 @@ from market_intel.composition import build_runtime
 from market_intel.config import load_config
 from market_intel.domain.exceptions import MarketIntelError, MarketIntelPublishError
 from market_intel.domain.models import (
+    SKIP_COMPUTED,
+    SKIP_MANUAL,
+    SKIP_NO_ADAPTER,
     CollectionResult,
     DashboardSnapshot,
     RunResult,
@@ -27,16 +30,14 @@ from market_intel.infrastructure.export.gog_sheets_publisher import (
 DEGRADED_PUBLISH_STATUSES: Final[frozenset[str]] = frozenset(
     {STATUS_SKIPPED_NO_GOG, STATUS_SKIPPED_UNCHANGED}
 )
-_HANDLED_SKIP_REASONS: Final[frozenset[str]] = frozenset(
+_HANDLED_SKIP_CODES: Final[frozenset[str]] = frozenset(
     {
-        "computed",
-        "hand-skip",
-        "hand skip",
-        # collect_vintages (Agent A) benign reasons: manual skip, computed
-        # series deferred to the compute stage, no adapter for a source.
-        "джерело вимкнено вручну",
-        "обчислюється пізніше",
-        "немає адаптера для джерела",
+        SKIP_MANUAL,
+        SKIP_COMPUTED,
+        # collect_vintages benign codes: manual skip, computed series deferred
+        # to the compute stage, no adapter for a source - none is an upstream
+        # fetch failure, so none triggers the all-sources-failed exit.
+        SKIP_NO_ADAPTER,
     }
 )
 
@@ -167,8 +168,8 @@ def _print_result(result: RunResult, *, show_details: bool) -> None:
 
     for error in result.collected.errors:
         print(f"Увага: джерело недоступне: {error}")
-    for source, reason in result.collected.skipped:
-        print(f"Увага: джерело {source} пропущено ({reason}).")
+    for skip in result.collected.skipped:
+        print(f"Увага: джерело {skip.key} пропущено ({skip.detail}).")
     for warning in dashboard.warnings_uk:
         print(f"Увага: {warning}")
 
@@ -248,9 +249,5 @@ def _all_external_sources_failed(collected: CollectionResult) -> bool:
     """Exit-ladder rule: nothing fetched and skips were not benign."""
     if collected.fetched:
         return False
-    unhandled = [
-        source
-        for source, reason in collected.skipped
-        if reason.strip().lower() not in _HANDLED_SKIP_REASONS
-    ]
+    unhandled = [skip for skip in collected.skipped if skip.code not in _HANDLED_SKIP_CODES]
     return bool(unhandled) or bool(collected.errors)
