@@ -20,7 +20,7 @@ import requests
 from market_intel.domain.exceptions import CollectorError
 from market_intel.domain.models import SeriesObservation, SeriesSpec
 from market_intel.infrastructure.http_base import HttpGatewayBase, require_param
-from signals.domain.timing import now_kyiv
+from signals.domain.timing import KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ class DamodaranGateway(HttpGatewayBase):
             raise CollectorError("damodaran: не вдалося знайти implied ERP у таблиці.")
         observation = SeriesObservation(
             series_id=spec.key,
-            obs_date=now_kyiv().date(),
+            obs_date=now_utc.astimezone(KYIV_TZ).date(),
             value=implied_erp,
             source="damodaran",
             fetched_at=now_utc,

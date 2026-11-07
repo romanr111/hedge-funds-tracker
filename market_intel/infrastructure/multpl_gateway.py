@@ -22,7 +22,7 @@ import requests
 from market_intel.domain.exceptions import CollectorError
 from market_intel.domain.models import SeriesObservation, SeriesSpec
 from market_intel.infrastructure.http_base import HttpGatewayBase, require_param
-from signals.domain.timing import now_kyiv
+from signals.domain.timing import KYIV_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,7 @@ class MultplGateway(HttpGatewayBase):
             raise CollectorError(f"Серія '{spec.key}': очікувався source='multpl', отримано '{spec.source}'.")
         current_url = require_param(spec, "current_url")
         history_url = require_param(spec, "history_url")
-        fetched_on = now_kyiv().date()
+        fetched_on = now_utc.astimezone(KYIV_TZ).date()
 
         current_text = self._get_text(current_url)
         current_value = parse_current_value(current_text)

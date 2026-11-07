@@ -10,7 +10,6 @@ import requests
 
 import market_intel.infrastructure.factset_gateway as factset_module
 import market_intel.infrastructure.http_base as http_base
-import market_intel.infrastructure.multpl_gateway as multpl_module
 from market_intel.application.use_cases.collect_vintages import collect_vintages
 from market_intel.domain.exceptions import CollectorError
 from market_intel.domain.models import CollectionResult, SeriesObservation, SeriesSpec
@@ -268,13 +267,8 @@ def test_yahoo_gateway_encodes_symbol_in_path() -> None:
 # --- multpl ----------------------------------------------------------------
 
 
-def test_multpl_gateway_parses_current_and_month_end_history(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # Pin the Kyiv fetch date so fixture expectations never drift with the clock.
-    kyiv = multpl_module.now_kyiv().tzinfo
-    pinned = lambda: datetime(2026, 11, 7, 7, tzinfo=kyiv)
-    monkeypatch.setattr(multpl_module, "now_kyiv", pinned)
+def test_multpl_gateway_parses_current_and_month_end_history() -> None:
+    # The fetch date rides the injected now_utc (November: Kyiv = UTC+2 -> 09:00).
     session = _FakeSession([
         _FakeResponse(_fixture("multpl_current.html")),
         _FakeResponse(_fixture("multpl_history.html")),
@@ -399,6 +393,9 @@ def test_factset_gateway_uses_direct_pdf_response_with_pdftotext(
     assert len(observations) == 1
     assert observations[0].value == 17.7
     assert observations[0].source == "factset"
+    # MMDDYY stamp in the resolved filename (EarningsInsight_110626A.pdf) wins
+    # over the injected clock: a re-run of the same report dedupes cleanly.
+    assert observations[0].obs_date == date(2026, 11, 6)
 
 
 def test_factset_gateway_follows_pdf_link_from_landing_page(
@@ -419,6 +416,7 @@ def test_factset_gateway_follows_pdf_link_from_landing_page(
     assert len(session.calls) == 2
     assert session.calls[1]["url"].endswith("EarningsInsight_110626A.pdf")
     assert observations[0].value == 17.7
+    assert observations[0].obs_date == date(2026, 11, 6)  # filename MMDDYY stamp
 
 
 def test_factset_gateway_raises_when_pdftotext_missing(
@@ -457,22 +455,61 @@ def test_factset_gateway_temp_files_are_deleted(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(factset_module, "run_pdftotext", lambda *_a, **_k: pdf_fixture)
     session = _FakeSession([_FakeResponse(content=b"%PDF-1.7 fake")])
     gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
-    gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
+    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
 
     assert written, "gateway must write exactly one temp pdf"
     assert all(not Path(name).exists() for name in written)
+    # No filename stamp and no cover date in the fixture text: the injected
+    # clock (Kyiv 09:00 Nov 7) is the fallback, and the "November 1, 2023"
+    # historical reference in the fixture must be ignored.
+    assert observations[0].obs_date == date(2026, 11, 7)
+
+
+def test_factset_gateway_takes_cover_date_from_pdf_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pdf_fixture = _fixture("factset_cover_date.txt")
+    monkeypatch.setattr(factset_module, "run_pdftotext", lambda *a, **k: pdf_fixture)
+    session = _FakeSession([
+        _FakeResponse(
+            content=b"%PDF-1.7 fake",
+            headers={"Content-Type": "application/pdf"},
+            # No MMDDYY stamp in the filename: the cover date must be found
+            # in the text near the report masthead, not the trap date and
+            # not the injected Nov 5 clock.
+            url="https://advantage.factset.com/EarningsInsight.pdf",
+        )
+    ])
+    gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
+
+    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 5, 9))
+
+    assert observations[0].value == 18.2
+    assert observations[0].obs_date == date(2026, 11, 6)
+
+
+def test_factset_date_parsers_reject_invalid_and_historical_dates() -> None:
+    assert factset_module.date_from_pdf_filename(
+        "https://advantage.factset.com/hubfs/EarningsInsight_110626A.pdf"
+    ) == date(2026, 11, 6)
+    # Not an MMDDYY stamp: month 24 is invalid, bare .pdf has no digits.
+    assert factset_module.date_from_pdf_filename("https://x.test/report_241201.pdf") is None
+    assert factset_module.date_from_pdf_filename("https://x.test/EarningsInsight.pdf") is None
+    assert factset_module.date_from_pdf_filename("https://x.test/page") is None
+    # The existing fixture cites "November 1, 2023" historically only: it is
+    # outside both cover zones, so no text date is claimed.
+    assert factset_module.cover_date_from_pdf_text(_fixture("factset_forward_pe.txt")) is None
+    assert factset_module.cover_date_from_pdf_text(
+        _fixture("factset_cover_date.txt")
+    ) == date(2026, 11, 6)
 
 
 # --- Damodaran -------------------------------------------------------------
 
 
-def test_damodaran_gateway_takes_latest_implied_erp_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import market_intel.infrastructure.damodaran_gateway as damodaran_module
-
-    kyiv = damodaran_module.now_kyiv().tzinfo
-    monkeypatch.setattr(damodaran_module, "now_kyiv", lambda: datetime(2026, 11, 7, 7, tzinfo=kyiv))
+def test_damodaran_gateway_takes_latest_implied_erp_row() -> None:
+    # The obs date rides the injected now_utc (November: Kyiv = UTC+2 -> 09:00);
+    # annual rows carry a bare year only, so run-date stamping stays by design.
     session = _FakeSession([_FakeResponse(_fixture("damodaran_histimpl.html"))])
     gateway = DamodaranGateway(session=session, min_interval_seconds=0.0)
 
@@ -481,6 +518,7 @@ def test_damodaran_gateway_takes_latest_implied_erp_row(
     assert len(observations) == 1
     assert observations[0].value == pytest.approx(4.23)
     assert observations[0].source == "damodaran"
+    assert observations[0].obs_date == date(2026, 11, 7)
 
 
 def test_damodaran_gateway_skips_blank_erp_rows() -> None:
