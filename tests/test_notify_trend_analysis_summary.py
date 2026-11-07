@@ -311,6 +311,78 @@ def test_notify_trend_analysis_summary_force_send_ignores_dedup_marker(tmp_path:
     assert len(notifier.sent) == 2
 
 
+def test_notify_trend_analysis_summary_skips_when_target_quarter_review_is_open(tmp_path: Path) -> None:
+    db_path = tmp_path / "signals.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
+    _seed_trend_and_snapshot_data(db_path)
+
+    notifier = _CapturingNotifier()
+    store = StateStore(db_path)
+    try:
+        store.upsert_reporting_source_review(
+            manager_cik="0000000001",
+            manager_name="Fund 1",
+            report_quarter="2025Q4",
+            notice_accession="notice-q4",
+            notice_filing_date="2026-02-14",
+            candidate_ciks=("0000000009",),
+        )
+
+        notify_trend_analysis_summary(
+            store,
+            [notifier],
+            dry_run=False,
+            trend_status="computed",
+            report_quarter="2025Q4",
+            manager_ciks=["0000000001", "0000000002", "0000000003", "0000000004"],
+            min_conf=0.5,
+            limit=8,
+            symbols_file=str(symbols_path),
+            now_fn=lambda: datetime(2026, 2, 20, tzinfo=timezone.utc),
+        )
+    finally:
+        store.close()
+
+    assert notifier.sent == []
+
+
+def test_notify_trend_analysis_summary_sends_when_review_is_only_for_other_quarter(tmp_path: Path) -> None:
+    db_path = tmp_path / "signals.sqlite3"
+    symbols_path = tmp_path / "symbols.json"
+    symbols_path.write_text('{"111111111":"AAA","222222222":"BBB"}')
+    _seed_trend_and_snapshot_data(db_path)
+
+    notifier = _CapturingNotifier()
+    store = StateStore(db_path)
+    try:
+        store.upsert_reporting_source_review(
+            manager_cik="0000000001",
+            manager_name="Fund 1",
+            report_quarter="2025Q3",
+            notice_accession="notice-q3",
+            notice_filing_date="2025-11-14",
+            candidate_ciks=("0000000009",),
+        )
+
+        notify_trend_analysis_summary(
+            store,
+            [notifier],
+            dry_run=False,
+            trend_status="computed",
+            report_quarter="2025Q4",
+            manager_ciks=["0000000001", "0000000002", "0000000003", "0000000004"],
+            min_conf=0.5,
+            limit=8,
+            symbols_file=str(symbols_path),
+            now_fn=lambda: datetime(2026, 2, 20, tzinfo=timezone.utc),
+        )
+    finally:
+        store.close()
+
+    assert len(notifier.sent) == 1
+
+
 def test_build_trend_message_payload_uses_idea_and_to_monitor_labels() -> None:
     payload = build_trend_message_payload(
         report_quarter="2025Q4",

@@ -19,6 +19,9 @@ from signals.application.ports.notifier import NotifierPort
 from signals.application.use_cases.notify_quarterly_reports_completion import (
     notify_if_all_reports_published_for_current_quarter,
 )
+from signals.application.use_cases.notify_reporting_source_reviews import (
+    notify_unresolved_reporting_source_reviews,
+)
 from signals.application.use_cases.notify_nyse_quarter_close import notify_on_nyse_quarter_close
 from signals.application.use_cases.notify_trend_analysis_summary import notify_trend_analysis_summary
 from signals.application.use_cases.backfill_trend_history import run_backfill_trend_history
@@ -30,7 +33,6 @@ from signals.application.use_cases.track_manager import process_manager
 from signals.composition import build_notifier_list, build_runtime
 from signals.config import load_config
 from signals.domain.exceptions import NotificationError, StateStoreError
-from signals.domain.models import Manager
 from signals.domain.quarters import parse_report_quarter
 from signals.domain.trend_presentation import (
     HIGH_SIGNAL_WEIGHT_THRESHOLD,
@@ -1676,7 +1678,13 @@ def _main(logger: logging.Logger) -> int:
         if quarter_for_summary is None:
             print("No trend signals found.")
         else:
-            managers = [Manager(name=manager_config.name, cik=manager_config.cik) for manager_config in config.managers]
+            managers = list(config.managers)
+            notify_unresolved_reporting_source_reviews(
+                runtime.store,
+                runtime.notifiers,
+                dry_run=args.dry_run,
+                logger=logger,
+            )
             notify_if_all_reports_published_for_current_quarter(
                 managers,
                 runtime.store,
@@ -1782,7 +1790,7 @@ def _main(logger: logging.Logger) -> int:
         cleared_rows = runtime.store.clear_state()
         logger.info("State store cleared before run", extra={"rows_deleted": cleared_rows})
 
-    managers = [Manager(name=manager_config.name, cik=manager_config.cik) for manager_config in config.managers]
+    managers = list(config.managers)
     if runtime.notifiers:
         notify_on_nyse_quarter_close(
             runtime.store,
@@ -1809,6 +1817,12 @@ def _main(logger: logging.Logger) -> int:
         runtime.client,
         max_quarters=_snapshot_sync_max_quarters(max_filing_age_days=config.max_filing_age_days),
         max_filing_age_days=config.max_filing_age_days,
+        dry_run=args.dry_run,
+        logger=logger,
+    )
+    notify_unresolved_reporting_source_reviews(
+        runtime.store,
+        runtime.notifiers,
         dry_run=args.dry_run,
         logger=logger,
     )

@@ -27,7 +27,21 @@
   {
     "name": "Pershing Square Capital Management, L.P.",
     "cik": "0001336528",
-    "weight": 1.0
+    "weight": 1.0,
+    "filing_source_periods": [
+      {
+        "through_quarter": "2026Q1",
+        "source_ciks": [
+          "0001336528"
+        ]
+      },
+      {
+        "from_quarter": "2026Q2",
+        "source_ciks": [
+          "0002026053"
+        ]
+      }
+    ]
   },
   {
     "name": "Akre Capital Management LLC",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from signals.application.use_cases.notify_quarterly_reports_completion import (
     QUARTERLY_COMPLETION_STATE_CIK,
@@ -160,3 +161,38 @@ def test_already_notified_for_current_quarter_skips_duplicate() -> None:
 
     assert notifier.sent == []
     assert store.upserts == []
+
+
+class _SnapshotStore(_Store):
+    def __init__(self, states: dict[str, ManagerState], snapshot_ciks: set[str]) -> None:
+        super().__init__(states)
+        self._snapshot_ciks = snapshot_ciks
+
+    def get_manager_quarter_snapshot(self, cik: str, report_quarter: str) -> object | None:
+        assert report_quarter == "2025Q4"
+        return SimpleNamespace(cik=cik) if cik in self._snapshot_ciks else None
+
+
+def test_completion_uses_canonical_snapshot_when_state_is_from_prior_reporting_source() -> None:
+    managers = [
+        Manager(name="Fund A", cik="1"),
+        Manager(name="Fund B", cik="2"),
+    ]
+    store = _SnapshotStore(
+        {
+            "1": _state("1", "Fund A", "2025-09-30"),
+            "2": _state("2", "Fund B", "2025-12-31"),
+        },
+        {"1", "2"},
+    )
+    notifier = _CapturingNotifier()
+
+    notify_if_all_reports_published_for_current_quarter(
+        managers,
+        store,
+        [notifier],
+        dry_run=False,
+        now_fn=_fixed_now,
+    )
+
+    assert len(notifier.sent) == 1
