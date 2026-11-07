@@ -58,7 +58,7 @@ Before Git mutations, reconcile the ledger with actual worktree, branch, and sta
 
 ## Receipts
 
-- 2026-11-07: PR #41 review round 2 (8bfe687 fix + a3a8b11 test): quarter-scoped review gates (latest trends + summary), resumption quarter-break against composite accession churn, no review creation on transient submissions fetch failure. Focused suites: 37 passed (26 seam + 11 CLI). Full-suite gate in flight at push, receipt to follow.
+- 2026-11-07: PR #41 review round 2 (8bfe687 fix + a3a8b11 test): quarter-scoped review gates (latest trends + summary), resumption quarter-break against composite accession churn, no review creation on transient submissions fetch failure. Focused suites: 37 passed (26 seam + 11 CLI). Full suite: 239 passed in 1005.93s - merge gate passed.
 - 2026-11-06: PR #41 review fixes (F1+F4): composite-source helpers centralized in `signals/domain/filing_sources.py` (34f229b); 13 seam tests added (891fd4d, 4 files); full suite 234 passed in 1005.92s on the branch.
 - 2026-11-06: origin/main ran 50 DB-chore commits plus workflow/`.gitignore`/test changes ahead of local `main` (e8c81bd); branch was created from 8ccb1a7, not the stale local tip.
 - 2026-11-06: Draft PR #41 opened: https://github.com/romanr111/hedge-funds-tracker/pull/41 (verified OPEN/draft, base main). Commits: 75354db chore codegraph, 7c47cb8 feat reporting-source, dfb8255 ledger.
