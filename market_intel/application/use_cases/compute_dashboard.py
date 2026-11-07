@@ -17,8 +17,7 @@ Semantic decisions implemented here (contract interpretation):
 """
 from __future__ import annotations
 
-from bisect import bisect_left, bisect_right
-from collections import deque
+from bisect import bisect_right
 from dataclasses import replace
 from datetime import date, datetime, timedelta
 from typing import Mapping, Sequence
@@ -196,182 +195,24 @@ _FACT_LABELS_UK: Mapping[str, str] = {
 # point helpers
 # ---------------------------------------------------------------------------
 
-def _dedup_first(observations: Sequence) -> list[tuple[date, float]]:
-    """(obs_date, value) per date keeping the FIRST print, ascending by date.
-
-    Point-in-time discipline: a revised print is a new row; series logic uses
-    first prints, so duplicates collapse to the earliest stored row per date.
-    """
-    by_date: dict[date, float] = {}
-    for obs in observations:
-        if obs.obs_date not in by_date:
-            by_date[obs.obs_date] = float(obs.value)
-    return sorted(by_date.items())
-
-
-def _nearest_point(
-    points: list[tuple[date, float]],
-    target: date,
-    tol_days: int,
-) -> tuple[date, float] | None:
-    """Obs closest to ``target`` within ``tol_days``; earlier date wins ties."""
-    if not points:
-        return None
-    dates = [d for d, _ in points]
-    idx = bisect_left(dates, target)
-    candidates: list[tuple[int, date, float]] = []
-    for i in (idx - 1, idx):
-        if 0 <= i < len(points):
-            diff = abs((points[i][0] - target).days)
-            if diff <= tol_days:
-                candidates.append((diff, points[i][0], points[i][1]))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda c: (c[0], c[1]))
-    _, d, v = candidates[0]
-    return (d, v)
-
-
-def _mean(points: Sequence[tuple[date, float]]) -> float | None:
-    if not points:
-        return None
-    return sum(v for _, v in points) / len(points)
-
-
-class _SortedSeries:
-    """Pre-sorted dated series supporting fast windowed lookups via bisect."""
-
-    def __init__(self, points: list[tuple[date, float]]) -> None:
-        self.points = points
-        self.dates = [d for d, _ in points]
-
-    def _slice(self, start: date, end: date) -> list[tuple[date, float]]:
-        lo = bisect_left(self.dates, start)
-        hi = bisect_right(self.dates, end)
-        return self.points[lo:hi]
-
-    def rolling_mean(self, window_days: int, as_of: date) -> float | None:
-        return _mean(self._slice(as_of - timedelta(days=window_days), as_of))
-
-    def yoy(self, as_of: date) -> float | None:
-        """% change vs latest point <= as_of against obs near as_of-365d.
-
-        Mirrors domain year_over_year semantics on pre-sorted points.
-        """
-        hi = bisect_right(self.dates, as_of)
-        if hi < 2:
-            return None
-        window = self.points[:hi]
-        now_d, now_v = window[-1]
-        target = now_d - timedelta(days=365)
-        year_ago = _nearest_point(window, target, 35)
-        if year_ago is None or abs((year_ago[0] - target).days) > 35:
-            return None
-        if year_ago[1] == 0.0:
-            return None
-        return (now_v / year_ago[1] - 1.0) * 100.0
-
-
 def _pair_points(
     a: list[tuple[date, float]],
     b: list[tuple[date, float]],
     tol_days: int,
 ) -> list[tuple[date, float, float]]:
     """Anchor on each ``a`` date; pair with nearest ``b`` obs within tol."""
-    b_series = _SortedSeries(b)
     out: list[tuple[date, float, float]] = []
     for d_a, v_a in a:
-        pair_b = _nearest_point(b, d_a, tol_days)
+        pair_b = calc.nearest_point(b, d_a, tol_days)
         if pair_b is None:
             continue
         out.append((max(d_a, pair_b[0]), v_a, pair_b[1]))
     return out
 
 
-def _weekly_closes(points: list[tuple[date, float]]) -> list[tuple[date, float]]:
-    """Last observed close per ISO week, anchored at that close's date."""
-    by_week: dict[tuple[int, int], tuple[date, float]] = {}
-    for d, v in points:
-        iso = d.isocalendar()
-        by_week[(iso[0], iso[1])] = (d, v)
-    return sorted(by_week.values())
-
-
-def _weekly_rsi_series(closes: list[tuple[date, float]], period: int = 14) -> list[tuple[date, float]]:
-    """Wilder RSI evaluated at every weekly close once the warmup completes."""
-    if len(closes) < period + 1:
-        return []
-    changes = [closes[i][1] - closes[i - 1][1] for i in range(1, len(closes))]
-    seed = changes[:period]
-    avg_gain = sum(c for c in seed if c > 0) / period
-    avg_loss = sum(-c for c in seed if c < 0) / period
-    out: list[tuple[date, float]] = [_rsi_point(closes[period][0], avg_gain, avg_loss)]
-    for offset, change in enumerate(changes[period:], start=period):
-        gain = change if change > 0 else 0.0
-        loss = -change if change < 0 else 0.0
-        avg_gain = (avg_gain * (period - 1) + gain) / period
-        avg_loss = (avg_loss * (period - 1) + loss) / period
-        out.append(_rsi_point(closes[offset + 1][0], avg_gain, avg_loss))
-    return out
-
-
-def _rsi_point(d: date, avg_gain: float, avg_loss: float) -> tuple[date, float]:
-    if avg_loss == 0.0:
-        value = 100.0 if avg_gain > 0.0 else 50.0
-    else:
-        rs = avg_gain / avg_loss
-        value = 100.0 - 100.0 / (1.0 + rs)
-    return (d, value)
-
-
-def _pct_ma_series(points: list[tuple[date, float]], window: int) -> list[tuple[date, float]]:
-    """(last/window-SMA - 1)*100 per day once the SMA window fills."""
-    out: list[tuple[date, float]] = []
-    running = deque[float]([])
-    total = 0.0
-    for d, v in points:
-        running.append(v)
-        total += v
-        if len(running) > window:
-            total -= running.popleft()
-        if len(running) == window and total != 0.0:
-            sma = total / window
-            out.append((d, (v / sma - 1.0) * 100.0))
-    return out
-
-
-def _drawdown_series(points: list[tuple[date, float]], lookback_days: int) -> list[tuple[date, float]]:
-    """(last/max-in-lookback - 1)*100 per day; sliding-window max via deque."""
-    out: list[tuple[date, float]] = []
-    window: deque[tuple[date, float]] = deque()
-    maxima: deque[tuple[date, float]] = deque()
-    for d, v in points:
-        window.append((d, v))
-        while maxima and maxima[-1][1] <= v:
-            maxima.pop()
-        maxima.append((d, v))
-        cutoff = d - timedelta(days=lookback_days - 1)
-        while window and window[0][0] < cutoff:
-            drop_d, drop_v = window.popleft()
-            if maxima and maxima[0] == (drop_d, drop_v):
-                maxima.popleft()
-        if window and maxima and maxima[0][1] != 0.0:
-            out.append((d, (window[-1][1] / maxima[0][1] - 1.0) * 100.0))
-    return out
-
-
 # ---------------------------------------------------------------------------
 # derived series builders (all pure: points in, points out)
 # ---------------------------------------------------------------------------
-
-def _latest_at_or_before(points: list[tuple[date, float]], as_of: date) -> tuple[date, float] | None:
-    latest: tuple[date, float] | None = None
-    for d, v in points:
-        if d > as_of:
-            break
-        latest = (d, v)
-    return latest
-
 
 def _derive_ratio_like(
     a: list[tuple[date, float]] | None,
@@ -397,7 +238,7 @@ def _derive_claims_yoy(icsa: list[tuple[date, float]] | None, as_of: date) -> tu
     """YoY of the 28-day trailing mean of initial claims."""
     if not icsa:
         return None
-    series = _SortedSeries(icsa)
+    series = calc.SortedSeries(icsa)
 
     def _yoy_at(t: date) -> tuple[date, float] | None:
         m_now = series.rolling_mean(28, t)
@@ -419,16 +260,16 @@ def _derive_hy_change_6m(hy: list[tuple[date, float]] | None, as_of: date) -> tu
         return None
     points: list[tuple[date, float]] = []
     for d, v in hy:
-        base = _nearest_point(hy, d - timedelta(days=_HY_6M_DAYS), _HY_6M_TOL_DAYS)
+        base = calc.nearest_point(hy, d - timedelta(days=_HY_6M_DAYS), _HY_6M_TOL_DAYS)
         if base is None or base[0] >= d:
             continue
         points.append((d, (v - base[1]) * 100.0))
     if not points:
         return None
-    now = _latest_at_or_before(hy, as_of)
+    now = calc.latest_at_or_before(hy, as_of)
     if now is None:
         return None
-    base_now = _nearest_point(hy, as_of - timedelta(days=_HY_6M_DAYS), _HY_6M_TOL_DAYS)
+    base_now = calc.nearest_point(hy, as_of - timedelta(days=_HY_6M_DAYS), _HY_6M_TOL_DAYS)
     if base_now is None or base_now[0] >= now[0]:
         return points, (now[0], points[-1][1])
     return points, (now[0], (now[1] - base_now[1]) * 100.0)
@@ -445,12 +286,12 @@ def _derive_netliq(
         return None
     points: list[tuple[date, float]] = []
     for d, w in walcl:
-        r = _nearest_point(rrp, d, _NETLIQ_PAIR_TOL_DAYS)
-        t = _nearest_point(tga, d, _NETLIQ_PAIR_TOL_DAYS)
+        r = calc.nearest_point(rrp, d, _NETLIQ_PAIR_TOL_DAYS)
+        t = calc.nearest_point(tga, d, _NETLIQ_PAIR_TOL_DAYS)
         if r is None or t is None:
             continue
         points.append((d, w / 1000.0 - r[1] - t[1]))
-    current = _latest_at_or_before(points, as_of)
+    current = calc.latest_at_or_before(points, as_of)
     if not points or current is None:
         return None
     return points, current
@@ -493,11 +334,11 @@ def _derive_margin_family(
     """(yoy series/current, mom change, yoy max over last 6 months) for margin debt."""
     if not margin:
         return None
-    series = _SortedSeries(margin)
+    series = calc.SortedSeries(margin)
     yoy_points = [(d, y) for d, _ in margin if (y := series.yoy(d)) is not None]
     if not yoy_points:
         return None
-    now = _latest_at_or_before(yoy_points, as_of)
+    now = calc.latest_at_or_before(yoy_points, as_of)
     if now is None:
         return None
 
@@ -522,11 +363,11 @@ def _derive_curve_diagnostics(
     """(90d slope pp, 540d min pp) of the 3M10Y curve."""
     if not curve:
         return None, None
-    latest = _latest_at_or_before(curve, as_of)
+    latest = calc.latest_at_or_before(curve, as_of)
     if latest is None:
         return None, None
     slope: float | None = None
-    base = _nearest_point(curve, latest[0] - timedelta(days=_CURVE_SLOPE_DAYS), _CURVE_SLOPE_TOL_DAYS)
+    base = calc.nearest_point(curve, latest[0] - timedelta(days=_CURVE_SLOPE_DAYS), _CURVE_SLOPE_TOL_DAYS)
     if base is not None:
         slope = latest[1] - base[1]
     window = [v for d, v in curve if as_of - timedelta(days=_CURVE_MIN_DAYS) <= d <= as_of]
@@ -737,7 +578,7 @@ def compute_dashboard(
         spec = input_specs[key]
         pit = reader.read_point_in_time(key, as_of)
         hist_obs = reader.read_history(key, end=as_of)
-        points = _dedup_first(hist_obs if hist_obs else [])
+        points = calc.dedup_first(hist_obs if hist_obs else [])
         if pit is None or not points:
             warnings.append(f"{key}: немає даних у сховищі станом на {as_of.isoformat()}")
             continue
@@ -789,11 +630,11 @@ def compute_dashboard(
     # netliq_yoy: YoY of the merged netliq series
     netliq_points = histories.get("netliq_tbn")
     if netliq_points:
-        netliq_series = _SortedSeries(netliq_points)
+        netliq_series = calc.SortedSeries(netliq_points)
         yoy_points = [(d, y) for d, _ in netliq_points if (y := netliq_series.yoy(d)) is not None]
         current = netliq_series.yoy(as_of)
         if yoy_points and current is not None:
-            obs_date = _latest_at_or_before(netliq_points, as_of)
+            obs_date = calc.latest_at_or_before(netliq_points, as_of)
             _consume_derived(
                 snapshots, histories, derived_specs, warnings, "netliq_yoy",
                 (yoy_points, (obs_date[0] if obs_date else as_of, current)),
@@ -807,20 +648,20 @@ def compute_dashboard(
     # --- SPX technique family -------------------------------------------------
     spx = _points("spx")
     if spx:
-        weekly = _weekly_closes(spx)
+        weekly = calc.weekly_close_series(spx)
         _consume_derived(
             snapshots, histories, derived_specs, warnings, "weekly_rsi",
-            _wrap_series(_weekly_rsi_series(weekly)),
+            _wrap_series(calc.weekly_rsi_series(weekly)),
             as_of=as_of,
         )
         _consume_derived(
             snapshots, histories, derived_specs, warnings, "pct_200dma",
-            _wrap_series(_pct_ma_series(spx, _PCT_200DMA_WINDOW)),
+            _wrap_series(calc.pct_ma_series(spx, _PCT_200DMA_WINDOW)),
             as_of=as_of,
         )
         _consume_derived(
             snapshots, histories, derived_specs, warnings, "drawdown_2y",
-            _wrap_series(_drawdown_series(spx, _DRAWDOWN_LOOKBACK_DAYS)),
+            _wrap_series(calc.drawdown_series(spx, _DRAWDOWN_LOOKBACK_DAYS)),
             as_of=as_of,
         )
     else:
@@ -912,7 +753,7 @@ def _wrap_series(points: list[tuple[date, float]]) -> tuple[list[tuple[date, flo
 
 
 def _latest_date(points: list[tuple[date, float]] | None, as_of: date) -> date | None:
-    latest = _latest_at_or_before(points, as_of) if points else None
+    latest = calc.latest_at_or_before(points, as_of) if points else None
     return latest[0] if latest else None
 
 
@@ -923,7 +764,7 @@ def _derive_fg_min_28d_with_obs(
     """(min F&G over 28d, latest fg obs date); None value when history short."""
     if not fg:
         return None, None
-    latest = _latest_at_or_before(fg, as_of)
+    latest = calc.latest_at_or_before(fg, as_of)
     if latest is None:
         return None, None
     window = [v for d, v in fg if as_of - timedelta(days=_FG_MIN_WINDOW_DAYS - 1) <= d <= as_of]
