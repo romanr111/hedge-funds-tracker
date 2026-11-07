@@ -255,8 +255,9 @@ def test_module_tab_renders_indicator_rows() -> None:
     assert indicator_row[4] == 0.94
     assert indicator_row[5] == "Дорого"
 
-    # Percentile column is percent-formatted.
-    assert any(op.type_ == "PERCENT" and "'!E" in op.range for op in valuation.number_format_ops)
+    # Percentile column carries an explicit "%" suffix format (0-100 scale,
+    # so the Sheets-native PERCENT type would wrongly multiply by 100).
+    assert any(op.type_ == "NUMBER" and '"%"' in op.pattern and "'!E" in op.range for op in valuation.number_format_ops)
     assert count_cells(spec.tabs) > 0
 
 

@@ -402,6 +402,6 @@ def test_meanings_and_sources_populated_from_defaults() -> None:
     assert cape.source_uk == "test source"
     ecy = _by_key(snapshot, "valuation")["ecy"]
     assert ecy.source_uk == "розрахунок системи"
-    assert cape.unit_uk == ""
+    assert cape.unit_uk == "%"  # fallback unit map supplies plain units
     hy = _by_key(snapshot, "credit")["hy_oas"]
     assert hy.unit_uk == "%"

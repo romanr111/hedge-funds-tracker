@@ -105,6 +105,33 @@ _DEFAULT_MEANINGS_UK: Mapping[str, str] = {
     "margin_yoy": "Маржинальна заборгованість рік-до-року: вище +30% - ейфорія-позиціонування.",
 }
 
+# Human units per rendered key (registry params have no 'unit' keys; keep the
+# map here so the module tab shows plain units for a non-professional reader).
+_UNITS_BY_KEY: Mapping[str, str] = {
+    "cape": "%",
+    "ecy": "pp",
+    "forward_pe": "×",
+    "buffett_z1": "% ВВП",
+    "erp": "%",
+    "fed_funds": "%",
+    "vix": "",
+    "vix_vix3m": "коеф.",
+    "fg": "0-100",
+    "margin_yoy": "%",
+    "weekly_rsi": "",
+    "pct_200dma": "%",
+    "drawdown_2y": "%",
+    "nfci": "",
+    "curve": "%",
+    "claims_yoy": "%",
+    "real_10y": "%",
+    "netliq_yoy": "%",
+    "hy_oas": "pp",
+    "hy_change_6m": "bp",
+    "ig_oas": "pp",
+    "sofr_iorb": "bp",
+}
+
 # Diagnostic keys -> (title_uk, meaning_uk, unit_uk). module_key=None, render skipped.
 _DIAGNOSTIC_META: Mapping[str, tuple[str, str, str]] = {
     "curve_slope_90d": (
@@ -548,7 +575,7 @@ def _make_snapshot(
         stale_reason_uk=stale_reason,
         meaning_uk=spec.params.get("meaning_uk", _DEFAULT_MEANINGS_UK.get(key, "")),
         source_uk=spec.source if spec.source and spec.source != "computed" else _COMPUTED_FALLBACK_SOURCE,
-        unit_uk=spec.params.get("unit", ""),
+        unit_uk=spec.params.get("unit", "") or _UNITS_BY_KEY.get(key, ""),
     )
 
 

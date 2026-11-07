@@ -113,6 +113,10 @@ _TITLE_FORMAT_FIELDS: Final[
 ] = "userEnteredFormat.textFormat.bold,userEnteredFormat.textFormat.fontSize"
 _BOLD_FORMAT_FIELDS: Final[str] = "userEnteredFormat.textFormat.bold"
 _BACKGROUND_FORMAT_FIELDS: Final[str] = "userEnteredFormat.backgroundColor"
+# Long plain-Ukrainian explanation cells must wrap (otherwise the text is
+# clipped at the column edge when the neighbour cell is not empty).
+_WRAP_FORMAT_JSON: Final[Mapping[str, object]] = {"wrapStrategy": "WRAP"}
+_WRAP_FORMAT_FIELDS: Final[str] = "userEnteredFormat.wrapStrategy"
 
 _CHART_MIN_ROWS: Final[int] = 2
 _MIN_CLEAR_ROWS: Final[int] = 300
@@ -307,6 +311,15 @@ def _build_overview_tab(snapshot: DashboardSnapshot) -> TabSpec:
             )
     number_format_ops: list[NumberFormatOp] = []
     if snapshot.modules:
+        # Wrap the three wide explanation columns (Вердикт/Контекст/Факти) so
+        # the text is fully readable inside the sheet, not clipped.
+        format_ops.append(
+            FormatOp(
+                range=f"'{TAB_OVERVIEW_UK}'!D{module_first_row}:F{module_first_row + len(MODULE_KEYS) - 1}",
+                format_json=_WRAP_FORMAT_JSON,
+                fields=_WRAP_FORMAT_FIELDS,
+            )
+        )
         number_format_ops.append(
             NumberFormatOp(
                 range=f"'{TAB_OVERVIEW_UK}'!C{module_first_row}:C{module_first_row + len(MODULE_KEYS) - 1}",
@@ -443,11 +456,21 @@ def _build_module_tab(snapshot: DashboardSnapshot, module_key: str) -> TabSpec:
                 pattern="0.00",
             )
         )
+        # Percentiles are stored on a 0-100 scale; the numeric cells carry an
+        # explicit "%" suffix so Sheets does not multiply the value by 100.
         number_format_ops.append(
             NumberFormatOp(
                 range=f"'{tab_name}'!E{indicator_first_row}:E{indicator_last_row}",
-                type_="PERCENT",
-                pattern="0%",
+                type_="NUMBER",
+                pattern='0.0"%"',
+            )
+        )
+        # Wrap the long explanation columns (Свіжість/Сенс) for readability.
+        format_ops.append(
+            FormatOp(
+                range=f"'{tab_name}'!G{indicator_first_row}:H{indicator_last_row}",
+                format_json=_WRAP_FORMAT_JSON,
+                fields=_WRAP_FORMAT_FIELDS,
             )
         )
 
@@ -538,6 +561,16 @@ def _build_forward_tab(snapshot: DashboardSnapshot) -> TabSpec:
                 note=FORWARD_EVIDENCE_NOTE_UK,
             ),
         )
+        first_data_row = header_row + 1
+        last_data_row = row
+        for column_letter in ("A", "D", "H"):
+            format_ops.append(
+                FormatOp(
+                    range=f"'{TAB_FORWARD_UK}'!{column_letter}{first_data_row}:{column_letter}{last_data_row}",
+                    format_json=_WRAP_FORMAT_JSON,
+                    fields=_WRAP_FORMAT_FIELDS,
+                )
+            )
 
     return TabSpec(
         name=TAB_FORWARD_UK,
