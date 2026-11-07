@@ -20,7 +20,6 @@ from market_intel.domain.models import (
     CollectionResult,
     SeriesObservation,
     SeriesSpec,
-    Skip,
 )
 from market_intel.infrastructure.cnn_gateway import CnnFgGateway
 from market_intel.infrastructure.damodaran_gateway import DamodaranGateway
