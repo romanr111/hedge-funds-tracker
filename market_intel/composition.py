@@ -79,16 +79,16 @@ def _build_fetchers(config) -> Mapping[str, SeriesFetcher]:
     """Build one gateway per data source with its configured throttle interval.
 
     Deferred imports: gateway modules are owned by the parallel data agent
-    (market_intel/infrastructure/market/). If a module is missing, the
+    (flat under market_intel/infrastructure/). If a module is missing, the
     resulting ImportError names the adapter explicitly.
     """
-    from market_intel.infrastructure.market.fred_csv_gateway import FredCsvGateway
-    from market_intel.infrastructure.market.yahoo_chart_gateway import YahooChartGateway
-    from market_intel.infrastructure.market.multpl_gateway import MultplGateway
-    from market_intel.infrastructure.market.finra_gateway import FinraGateway
-    from market_intel.infrastructure.market.cnn_fg_gateway import CnnFgGateway
-    from market_intel.infrastructure.market.factset_gateway import FactsetGateway
-    from market_intel.infrastructure.market.damodaran_gateway import DamodaranGateway
+    from market_intel.infrastructure.fred_gateway import FredCsvGateway
+    from market_intel.infrastructure.yahoo_gateway import YahooChartGateway
+    from market_intel.infrastructure.multpl_gateway import MultplGateway
+    from market_intel.infrastructure.finra_gateway import FinraGateway
+    from market_intel.infrastructure.cnn_gateway import CnnFgGateway
+    from market_intel.infrastructure.factset_gateway import FactsetGateway
+    from market_intel.infrastructure.damodaran_gateway import DamodaranGateway
 
     return {
         "fred": FredCsvGateway(min_interval_seconds=config.fred_interval_seconds),

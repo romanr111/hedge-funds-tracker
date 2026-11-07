@@ -264,7 +264,7 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
     ),
     "erp": SeriesSpec(
         key="erp",
-        title_uk="Implied ERP (Дамодоран)",
+        title_uk="Implied ERP (Damodaran, річна таблиця)",
         source="damodaran",
         freq="monthly",
         staleness_days=35,
@@ -273,7 +273,10 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         module_key="valuation",
         params={
             "url": "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/datafile/histimpl.html",
-            "source_label": "Damodaran",
+            # histimpl.html is the annual implied ERP table (the older
+            # implprem.html endpoint is dead since ~2026). The value is the
+            # latest published annual reading, fetched and dated on run date.
+            "source_label": "Damodaran (histimpl, річна)",
         },
     ),
     # --- Computed series (filled by the gauges use case, not fetched) ------

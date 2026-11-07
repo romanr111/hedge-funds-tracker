@@ -6,7 +6,7 @@ import logging
 from collections.abc import Sequence
 from typing import Final
 
-from signals.infrastructure.logging import configure_logging, log_context, new_trace_id
+from signals.infrastructure.logging.json_logger import configure_logging, log_context, new_trace_id
 
 from market_intel.application.use_cases.run_market_intel import run_market_intel
 from market_intel.composition import build_runtime
@@ -28,7 +28,16 @@ DEGRADED_PUBLISH_STATUSES: Final[frozenset[str]] = frozenset(
     {STATUS_SKIPPED_NO_GOG, STATUS_SKIPPED_UNCHANGED}
 )
 _HANDLED_SKIP_REASONS: Final[frozenset[str]] = frozenset(
-    {"computed", "hand-skip", "hand skip"}
+    {
+        "computed",
+        "hand-skip",
+        "hand skip",
+        # collect_vintages (Agent A) benign reasons: manual skip, computed
+        # series deferred to the compute stage, no adapter for a source.
+        "джерело вимкнено вручну",
+        "обчислюється пізніше",
+        "немає адаптера для джерела",
+    }
 )
 
 
