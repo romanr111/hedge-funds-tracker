@@ -73,7 +73,7 @@ class FakeGogClient:
     def gog_available(self) -> bool:
         return self.available
 
-    def _run(self, args: list[str], *, force: bool = False, retries: int = 3) -> GogOutcome:
+    def run(self, args: list[str], *, force: bool = False, retries: int = 3) -> GogOutcome:
         record: dict[str, Any] = {"args": list(args), "force": force, "retries": retries}
         self.calls.append(record)
         if args and args[0] == "sheets" and len(args) > 1:
@@ -574,14 +574,14 @@ def test_gog_unavailable_skips_without_any_calls() -> None:
 def test_unreachable_stored_ssid_and_create_parse_failure_raise() -> None:
     store = FakeStore(stored_ssid=STORED_SSID)
     client = FakeGogClient(fail_metadata_for=frozenset({STORED_SSID}))
-    original_run = client._run
+    original_run = client.run
 
     def break_create(args: list[str], *, force: bool = False, retries: int = 3) -> GogOutcome:
         if args[1:2] == ["create"]:
             return GogOutcome(0, "not json at all", "")
         return original_run(args, force=force, retries=retries)
 
-    client._run = break_create  # type: ignore[method-assign]
+    client.run = break_create  # type: ignore[method-assign]
 
     with pytest.raises(MarketIntelPublishError):
         _publish(store, client)
@@ -640,7 +640,7 @@ def test_gog_client_places_no_input_and_force_flags(monkeypatch: pytest.MonkeyPa
     ran = _patch_gog_runtime(monkeypatch, [(0, "{}")])
     client = GogClient(min_interval_seconds=0.0)
 
-    outcome = client._run(["sheets", "metadata", "SID", "-j"])
+    outcome = client.run(["sheets", "metadata", "SID", "-j"])
 
     assert outcome.returncode == 0
     assert ran[0] == [
@@ -659,7 +659,7 @@ def test_gog_client_appends_force_flag_when_desctructive(monkeypatch: pytest.Mon
     ran = _patch_gog_runtime(monkeypatch, [(0, "{}")])
     client = GogClient(min_interval_seconds=0.0)
 
-    client._run(["sheets", "delete-tab", "SID", "Tab"], force=True)
+    client.run(["sheets", "delete-tab", "SID", "Tab"], force=True)
 
     assert ran[0][-1] == "-y"
 
@@ -677,7 +677,7 @@ def test_gog_client_retries_on_quota_and_gives_up_after_retries(
     )
     client = GogClient(min_interval_seconds=0.0)
 
-    outcome = client._run(["sheets", "metadata", "SID", "-j"], retries=3)
+    outcome = client.run(["sheets", "metadata", "SID", "-j"], retries=3)
 
     assert outcome.returncode == 0
     assert len(ran) == 3  # two quota failures then success
@@ -689,7 +689,7 @@ def test_gog_client_returns_failure_without_retry_on_plain_error(
     ran = _patch_gog_runtime(monkeypatch, [(1, "PERMISSION_DENIED")])
     client = GogClient(min_interval_seconds=0.0)
 
-    outcome = client._run(["sheets", "metadata", "SID", "-j"], retries=3)
+    outcome = client.run(["sheets", "metadata", "SID", "-j"], retries=3)
 
     assert outcome.returncode == 1
     assert "PERMISSION_DENIED" in outcome.stderr or "PERMISSION_DENIED" in outcome.stdout

@@ -231,7 +231,7 @@ class GogSheetsPublisher:
         """Return (spreadsheet_id, metadata_doc, created_now)."""
         stored_id = self._store.get_setting(SETTING_SPREADSHEET_ID)
         if stored_id:
-            outcome = self._client._run(["sheets", "metadata", stored_id, "-j"])
+            outcome = self._client.run(["sheets", "metadata", stored_id, "-j"])
             doc = _parse_json_dict(outcome)
             if doc is not None and doc.get("spreadsheetId"):
                 return str(doc["spreadsheetId"]), doc, False
@@ -245,7 +245,7 @@ class GogSheetsPublisher:
             # Verified: `gog sheets create <title> --parent FOLDER_ID`.
             create_args.extend(["--parent", self._folder_id])
         create_args.extend(["-j", "--results-only"])
-        outcome = self._client._run(create_args)
+        outcome = self._client.run(create_args)
         if outcome.returncode != 0:
             raise MarketIntelPublishError(
                 "Не вдалося створити Spreadsheet: "
@@ -278,7 +278,7 @@ class GogSheetsPublisher:
             return titles
         if created_now:
             # The create response sometimes omits `sheets`; fetch metadata once.
-            outcome = self._client._run(["sheets", "metadata", spreadsheet_id, "-j"])
+            outcome = self._client.run(["sheets", "metadata", spreadsheet_id, "-j"])
             doc = _parse_json_dict(outcome)
             titles = _tab_titles(doc)
             if titles is not None:
@@ -318,7 +318,7 @@ class GogSheetsPublisher:
     def _delete_tab(self, spreadsheet_id: str, tab_name: str) -> None:
         # Verified: `gog sheets delete-tab <ssid> <tabName>` requires `--force`
         # (client `-y`) to skip its confirmation prompt.
-        outcome = self._client._run(
+        outcome = self._client.run(
             ["sheets", "delete-tab", spreadsheet_id, tab_name], force=True
         )
         if outcome.returncode != 0:
@@ -340,7 +340,7 @@ class GogSheetsPublisher:
         for tab in tabs:
             if tab.name in tab_titles:
                 continue
-            outcome = self._client._run(["sheets", "add-tab", spreadsheet_id, tab.name])
+            outcome = self._client.run(["sheets", "add-tab", spreadsheet_id, tab.name])
             if outcome.returncode != 0:
                 logger.warning(
                     "Failed to add tab (continuing)",
@@ -360,7 +360,7 @@ class GogSheetsPublisher:
         tmp_path: Path,
     ) -> None:
         for index, tab in enumerate(tabs):
-            clear_outcome = self._client._run(
+            clear_outcome = self._client.run(
                 [
                     "sheets",
                     "clear",
@@ -381,7 +381,7 @@ class GogSheetsPublisher:
                 json.dumps(payload, ensure_ascii=False), encoding="utf-8"
             )
             # Verified: `batch-update --data-json=@file <ssid> --input RAW`.
-            outcome = self._client._run(
+            outcome = self._client.run(
                 [
                     "sheets",
                     "batch-update",
@@ -400,7 +400,7 @@ class GogSheetsPublisher:
     def _apply_tab_formats(self, spreadsheet_id: str, tabs: Sequence[TabSpec]) -> None:
         for tab in tabs:
             for format_op in tab.format_ops:
-                outcome = self._client._run(
+                outcome = self._client.run(
                     [
                         "sheets",
                         "format",
@@ -414,7 +414,7 @@ class GogSheetsPublisher:
                 )
                 self._warn_non_critical(outcome, op="format", tab=tab.name)
             for number_op in tab.number_format_ops:
-                outcome = self._client._run(
+                outcome = self._client.run(
                     [
                         "sheets",
                         "number-format",
@@ -427,7 +427,7 @@ class GogSheetsPublisher:
                     ]
                 )
                 self._warn_non_critical(outcome, op="number-format", tab=tab.name)
-            freeze_outcome = self._client._run(
+            freeze_outcome = self._client.run(
                 [
                     "sheets",
                     "freeze",
@@ -440,7 +440,7 @@ class GogSheetsPublisher:
             )
             self._warn_non_critical(freeze_outcome, op="freeze", tab=tab.name)
             for letters, width in _resize_groups(tab.column_widths):
-                outcome = self._client._run(
+                outcome = self._client.run(
                     [
                         "sheets",
                         "resize-columns",
@@ -452,7 +452,7 @@ class GogSheetsPublisher:
                 )
                 self._warn_non_critical(outcome, op="resize-columns", tab=tab.name)
             for note_op in tab.note_ops:
-                outcome = self._client._run(
+                outcome = self._client.run(
                     [
                         "sheets",
                         "update-note",
@@ -502,7 +502,7 @@ class GogSheetsPublisher:
             )
             return False
 
-        list_outcome = self._client._run(["sheets", "chart", "list", spreadsheet_id, "-j"])
+        list_outcome = self._client.run(["sheets", "chart", "list", spreadsheet_id, "-j"])
         if list_outcome.returncode != 0:
             logger.warning(
                 "Cannot list existing charts; skipping chart creation",
@@ -521,7 +521,7 @@ class GogSheetsPublisher:
         if sheet_id is None:
             # Newly add-tab'ed tabs are missing from the resolved metadata doc;
             # re-fetch metadata once to resolve their sheetId.
-            refresh_outcome = self._client._run(
+            refresh_outcome = self._client.run(
                 ["sheets", "metadata", spreadsheet_id, "-j"]
             )
             refreshed_doc = _parse_json_dict(refresh_outcome)
@@ -574,7 +574,7 @@ class GogSheetsPublisher:
         # Verified:
         # `gog sheets chart create --spec-json=STRING|@file <ssid> [--sheet TAB]
         #  [--anchor CELL] [--width N] [--height N]`.
-        outcome = self._client._run(
+        outcome = self._client.run(
             [
                 "sheets",
                 "chart",

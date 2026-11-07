@@ -79,7 +79,7 @@ class GogClient:
                 time.sleep(remaining)
         self._last_invocation_monotonic = time.monotonic()
 
-    def _run(
+    def run(
         self,
         args: Sequence[str],
         *,

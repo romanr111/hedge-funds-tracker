@@ -149,7 +149,7 @@ class _FakeGogClient:
     def gog_available(self) -> bool:
         return True
 
-    def _run(self, args: list[str], *, force: bool = False, retries: int = 3) -> GogOutcome:
+    def run(self, args: list[str], *, force: bool = False, retries: int = 3) -> GogOutcome:
         self.calls.append({"args": list(args), "force": force})
         if not args or args[0] != "sheets":
             return GogOutcome(1, "", "unhandled command")

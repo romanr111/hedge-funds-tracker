@@ -36,6 +36,12 @@ from market_intel.domain.models import (
     SeriesSnapshot,
 )
 from market_intel.domain.percentiles import percentile_from_history
+from market_intel.domain.thresholds import (
+    CLAIMS_YOY_ALARM,
+    MARGIN_YOY_EUPHORIA,
+    RSI_OVERSOLD,
+    VIX_CAPITULATION,
+)
 from market_intel.domain.verdicts import format_value_uk, uk_days_word
 
 _DAY = timedelta(days=1)
@@ -58,13 +64,27 @@ _UNIT_SANITY_WARNING = "саніті юнітів невдалось"
 _COMPUTED_FALLBACK_SOURCE = "розрахунок системи"
 _FG_EUPHORIA_THRESHOLD = 80.0
 _FG_CAPITULATION_THRESHOLD = 10.0
-_VIX_CAPITULATION_THRESHOLD = 30.0
 _VIX_VIX3M_CAPITULATION_THRESHOLD = 1.0
-_RSI_OVERSOLD = 30.0
-_MARGIN_YOY_EUPHORIA = 30.0
 _CREDIT_GATE_HY = 4.5
-_CREDIT_GATE_CLAIMS_YOY = 20.0
-_CLAIMS_YOY_ALARM = _CREDIT_GATE_CLAIMS_YOY
+# Shared thresholds (RSI_OVERSOLD, MARGIN_YOY_EUPHORIA, CLAIMS_YOY_ALARM,
+# VIX_CAPITULATION, VIX_PANIC) live in market_intel.domain.thresholds so the
+# live module verdicts and the forward-return activation predicates cannot
+# drift apart.
+
+_PCT_200DMA_WINDOW = 200
+_DRAWDOWN_LOOKBACK_DAYS = 730
+
+_PAIR_COMBINES = {
+    "ecy": lambda cape, real: (1.0 / cape) * 100.0 - real if cape != 0.0 else None,
+    "vix_vix3m": lambda vix, vix3m: (vix / vix3m if vix3m != 0.0 else None),
+    "sofr_iorb": lambda sofr, iorb: (sofr - iorb) * 100.0,
+}
+
+
+def _wrap_series(points: list[tuple[date, float]]) -> tuple[list[tuple[date, float]], tuple[date, float]] | None:
+    if not points:
+        return None
+    return points, points[-1]
 
 _DEFAULT_MEANINGS_UK: Mapping[str, str] = {
     "cape": "Акції США коштують у десятки разів більше 10-річних середніх прибутків: за довгими мірилками це дорого.",
@@ -488,8 +508,8 @@ def _system_signal_uk(
     fg = _sval(snapshots, "fg")
     capitulation_count = sum(
         (
-            (vix is not None and vix > _VIX_CAPITULATION_THRESHOLD) or (vix_vix3m is not None and vix_vix3m > _VIX_VIX3M_CAPITULATION_THRESHOLD),
-            weekly_rsi is not None and weekly_rsi < _RSI_OVERSOLD,
+            (vix is not None and vix > VIX_CAPITULATION) or (vix_vix3m is not None and vix_vix3m > _VIX_VIX3M_CAPITULATION_THRESHOLD),
+            weekly_rsi is not None and weekly_rsi < RSI_OVERSOLD,
             fg is not None and fg < _FG_CAPITULATION_THRESHOLD,
         )
     )
@@ -500,7 +520,7 @@ def _system_signal_uk(
     fg_min = _sval(snapshots, "fg_min_28d")
     euphoria_count = 0
     euphoria_notes: list[str] = []
-    if margin_yoy is not None and margin_yoy >= _MARGIN_YOY_EUPHORIA:
+    if margin_yoy is not None and margin_yoy >= MARGIN_YOY_EUPHORIA:
         euphoria_count += 1
     if fg_min is None:
         # history too short to confirm/refute the 4-week greed condition
@@ -516,7 +536,7 @@ def _system_signal_uk(
     gate_triggers: list[str] = []
     if hy is not None and hy > _CREDIT_GATE_HY:
         gate_triggers.append(f"HY OAS {format_value_uk(hy, '')}% > 4,5%")
-    if claims is not None and claims > _CLAIMS_YOY_ALARM:
+    if claims is not None and claims > CLAIMS_YOY_ALARM:
         gate_triggers.append(f"claims р/р {format_value_uk(claims, '')}% > +20%")
     if gate_triggers:
         sentences.append(f"Кредитний гейт: зупинити ризик-нарощування ({'; '.join(gate_triggers)}).")
@@ -734,22 +754,6 @@ def compute_dashboard(
         system_signal_uk=system_signal_uk,
         warnings_uk=tuple(warnings),
     )
-
-
-_PCT_200DMA_WINDOW = 200
-_DRAWDOWN_LOOKBACK_DAYS = 730
-
-_PAIR_COMBINES = {
-    "ecy": lambda cape, real: (1.0 / cape) * 100.0 - real if cape != 0.0 else None,
-    "vix_vix3m": lambda vix, vix3m: (vix / vix3m if vix3m != 0.0 else None),
-    "sofr_iorb": lambda sofr, iorb: (sofr - iorb) * 100.0,
-}
-
-
-def _wrap_series(points: list[tuple[date, float]]) -> tuple[list[tuple[date, float]], tuple[date, float]] | None:
-    if not points:
-        return None
-    return points, points[-1]
 
 
 def _latest_date(points: list[tuple[date, float]] | None, as_of: date) -> date | None:

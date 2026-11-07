@@ -12,20 +12,22 @@ from dataclasses import replace
 from typing import Mapping
 
 from market_intel.domain.models import ForwardReturnRow, ModuleGauge, SeriesSnapshot
+from market_intel.domain.thresholds import (
+    CLAIMS_YOY_ALARM,
+    MARGIN_YOY_EUPHORIA,
+    RSI_OVERSOLD,
+    VIX_PANIC,
+)
 
 _HYPHEN = "-"
 _CAPE_NEAR_16_LOW = 15.0
 _CAPE_NEAR_16_HIGH = 18.0
 _CAPE_GT = 25.0
-_VIX_PANIC = 40.0
-_RSI_OVERSOLD = 30.0
 _FG_EXTREME_FEAR = 20.0
 _CURVE_INVERTED = 0.0
 _CURVE_NORMAL_LOW = 1.0
 _CURVE_NORMAL_HIGH = 2.0
 _HY_COMPRESSED = 3.5
-_MARGIN_YOY_EUPHORIA = 30.0
-_CLAIMS_YOY_ALARM = 20.0
 
 FORWARD_ROWS: tuple[ForwardReturnRow, ...] = (
     ForwardReturnRow(
@@ -330,12 +332,12 @@ def _curve_normal(series: Mapping[str, SeriesSnapshot]) -> bool:
 
 def _vix(series: Mapping[str, SeriesSnapshot]) -> bool:
     vix = _value(series, "vix")
-    return vix is not None and vix > _VIX_PANIC
+    return vix is not None and vix > VIX_PANIC
 
 
 def _weekly_rsi(series: Mapping[str, SeriesSnapshot]) -> bool:
     rsi_value = _value(series, "weekly_rsi")
-    return rsi_value is not None and rsi_value < _RSI_OVERSOLD
+    return rsi_value is not None and rsi_value < RSI_OVERSOLD
 
 
 def _fg_below(series: Mapping[str, SeriesSnapshot]) -> bool:
@@ -348,7 +350,7 @@ def _margin_peak(series: Mapping[str, SeriesSnapshot]) -> bool:
     mom = _value(series, _MARGIN_MOM_CHANGE_KEY)
     return (
         yoy_max is not None
-        and yoy_max >= _MARGIN_YOY_EUPHORIA
+        and yoy_max >= MARGIN_YOY_EUPHORIA
         and mom is not None
         and mom < 0.0
     )
@@ -356,7 +358,7 @@ def _margin_peak(series: Mapping[str, SeriesSnapshot]) -> bool:
 
 def _claims_yoy(series: Mapping[str, SeriesSnapshot]) -> bool:
     claims = _value(series, "claims_yoy")
-    return claims is not None and claims > _CLAIMS_YOY_ALARM
+    return claims is not None and claims > CLAIMS_YOY_ALARM
 
 
 def _nfci_above(series: Mapping[str, SeriesSnapshot]) -> bool:
