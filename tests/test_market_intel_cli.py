@@ -68,7 +68,7 @@ def _config(tmp_path: Path) -> MarketIntelConfig:
 def _module_gauge(module_key: str, score: float = 68.2) -> ModuleGauge:
     return ModuleGauge(
         module_key=module_key,
-        title_uk="Валютація" if module_key == "valuation" else module_key,
+        title_uk="Оцінка вартості" if module_key == "valuation" else module_key,
         score=score,
         state_key="state5",
         chip_label_uk="Дорого",
@@ -203,7 +203,7 @@ def test_cli_success_prints_summary_and_sheet_link(
     assert store.closed is True
     out = capsys.readouterr().out
     assert "Ринкова розвідка - дані станом на 2026-11-07 (Київ)" in out
-    assert "Валютація: Дорого (68.2) - Оцінки дорогі" in out
+    assert "Оцінка вартості: Дорого (68.2) - Оцінки дорогі" in out
     assert "Sheet: created https://docs.google.com/spreadsheets/d/SS123" in out
 
 
@@ -266,7 +266,7 @@ def test_cli_show_forces_no_publish_and_prints_module_table(
     assert recorded[0]["no_publish"] is True
     assert publisher.calls == []
     out = capsys.readouterr().out
-    assert "Модуль: Валютація" in out
+    assert "Модуль: Оцінка вартості" in out
     assert "|" in out
     assert "CAPE" in out
 

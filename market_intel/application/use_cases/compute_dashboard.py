@@ -499,7 +499,7 @@ def _system_signal_uk(
     m_chip = _chip_or_unavailable(by_module, "macro")
     c_chip = _chip_or_unavailable(by_module, "credit")
     sentences = [
-        f"Стан модулів: валютація - {v_chip}, настрої - {s_chip}, техніка - {t_chip}, макро - {m_chip}, кредит - {c_chip}."
+        f"Стан модулів: оцінка вартості - {v_chip}, настрої - {s_chip}, техніка - {t_chip}, макро - {m_chip}, кредит - {c_chip}."
     ]
 
     vix = _sval(snapshots, "vix")

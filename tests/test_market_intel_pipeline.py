@@ -182,5 +182,5 @@ def test_pipeline_publisher_creates_sheet_with_module_titles(tmp_path: Path) -> 
 
     assert result.status == STATUS_CREATED
     blob = repr(client.batches)
-    for title in ("Валютація", "Настрої", "Техніка", "Макро і ліквідність", "Кредит"):
+    for title in ("Оцінка вартості", "Настрої", "Техніка", "Макро і ліквідність", "Кредит"):
         assert title in blob

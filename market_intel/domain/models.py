@@ -18,7 +18,7 @@ MODULE_KEYS: Final[tuple[str, ...]] = (
 )
 
 MODULE_TITLES_UK: Final[Mapping[str, str]] = {
-    "valuation": "Валютація",
+    "valuation": "Оцінка вартості",
     "sentiment": "Настрої",
     "technique": "Техніка",
     "macro": "Макро і ліквідність",

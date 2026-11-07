@@ -150,7 +150,7 @@ def test_tabs_are_created_in_exact_fixed_order() -> None:
     assert [tab.name for tab in spec.tabs] == list(TAB_NAMES_UK)
     assert [tab.name for tab in spec.tabs] == [
         "Огляд",
-        "Валютація",
+        "Оцінка вартості",
         "Настрої",
         "Техніка",
         "Макро і ліквідність",
@@ -166,7 +166,7 @@ def test_overview_renders_module_rows_with_chip_labels_and_disclaimer() -> None:
     overview = _tab(spec, TAB_OVERVIEW_UK)
     rows = _rows_list(overview)
 
-    module_row = next(row for row in rows if row and row[0] == "Валютація")
+    module_row = next(row for row in rows if row and row[0] == "Оцінка вартості")
     assert module_row[1] == "Нейтрально"  # chip label kept beside the module
     assert module_row[2] == 50.0
     assert module_row[3] == "Вердикт для valuation"
@@ -189,7 +189,7 @@ def test_overview_renders_module_rows_with_chip_labels_and_disclaimer() -> None:
 def test_numeric_cells_keep_real_numbers() -> None:
     spec = build_sheet_document(_snapshot(indicators=[_indicator("valuation")]), _history_rows())
     overview = _tab(spec, TAB_OVERVIEW_UK)
-    module_row = next(row for row in _rows_list(overview) if row and row[0] == "Валютація")
+    module_row = next(row for row in _rows_list(overview) if row and row[0] == "Оцінка вартості")
     assert isinstance(module_row[2], float)
 
     for tab in spec.tabs:
@@ -266,11 +266,11 @@ def test_module_tab_gauge_header_carries_chip_and_score() -> None:
     valuation = _tab(spec, MODULE_TITLES_UK["valuation"])
     rows = _rows_list(valuation)
     gauge_row = rows[0]
-    assert gauge_row[0] == "Валютація"
+    assert gauge_row[0] == "Оцінка вартості"
     assert gauge_row[1] == "Нейтрально"
     assert gauge_row[2] == 50.0
     # Chip cell fill and notes are attached.
-    assert any(op.range == "'Валютація'!B1" and "backgroundColor" in op.format_json for op in valuation.format_ops)
+    assert any(op.range == "'Оцінка вартості'!B1" and "backgroundColor" in op.format_json for op in valuation.format_ops)
     assert any("0-100" in note.note for note in valuation.note_ops)
 
 
