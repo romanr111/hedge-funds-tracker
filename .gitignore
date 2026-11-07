@@ -7,5 +7,5 @@ venv/
 *.sqlite3
 data/
 logs/
-.codegraph/
 .headroom/
+.grepai/

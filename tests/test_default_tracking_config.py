@@ -28,3 +28,11 @@ def test_default_managers_weight_appaloosa_as_high_signal() -> None:
 
     appaloosa = next(manager for manager in managers if manager.name == "Appaloosa Management LP")
     assert appaloosa.weight == 1.5
+
+
+def test_default_pershing_source_transition_uses_parent_from_2026q2() -> None:
+    managers = load_managers(Path("config/managers.json"), None)
+
+    pershing = next(manager for manager in managers if manager.cik == "0001336528")
+    assert pershing.source_ciks_for_quarter("2026Q1") == ("0001336528",)
+    assert pershing.source_ciks_for_quarter("2026Q2") == ("0002026053",)

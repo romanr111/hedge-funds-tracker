@@ -2,25 +2,33 @@ from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
+import xml.etree.ElementTree as ET
 
 from signals.domain.models import Filing
 
 
 TARGET_FORMS = {"13F-HR", "13F-HR/A"}
+NOTICE_FORMS = {"13F-NT", "13F-NT/A"}
 
 
-def extract_filings(submissions: dict[str, Any]) -> list[Filing]:
+def extract_filings(
+    submissions: dict[str, Any],
+    *,
+    allowed_forms: set[str] | frozenset[str] | None = None,
+) -> list[Filing]:
     recent = submissions.get("filings", {}).get("recent", {})
     accessions = recent.get("accessionNumber", [])
     forms = recent.get("form", [])
     filing_dates = recent.get("filingDate", [])
     report_dates = recent.get("reportDate", [])
     acceptance_datetimes = recent.get("acceptanceDateTime", [])
+    primary_documents = recent.get("primaryDocument", [])
+    requested_forms = TARGET_FORMS if allowed_forms is None else allowed_forms
 
     count = min(len(accessions), len(forms), len(filing_dates), len(report_dates))
     filings: list[Filing] = []
     for idx in range(count):
-        if forms[idx] not in TARGET_FORMS:
+        if forms[idx] not in requested_forms:
             continue
         filings.append(
             Filing(
@@ -31,11 +39,39 @@ def extract_filings(submissions: dict[str, Any]) -> list[Filing]:
                 acceptance_datetime=acceptance_datetimes[idx]
                 if idx < len(acceptance_datetimes) and isinstance(acceptance_datetimes[idx], str)
                 else None,
+                primary_document=primary_documents[idx]
+                if idx < len(primary_documents) and isinstance(primary_documents[idx], str)
+                else None,
             )
         )
 
     filings.sort(key=lambda item: item.filing_date or "", reverse=True)
     return filings
+
+
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def extract_13f_notice_other_manager_ciks(xml_text: str) -> tuple[str, ...]:
+    """Extract candidate reporting-manager CIKs from a Form 13F notice cover page."""
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return ()
+
+    candidate_ciks: set[str] = set()
+    for other_manager in root.iter():
+        if _local_name(other_manager.tag) != "otherManager":
+            continue
+        for child in other_manager.iter():
+            if _local_name(child.tag) != "cik" or child.text is None:
+                continue
+            digits = "".join(character for character in child.text if character.isdigit())
+            if digits:
+                candidate_ciks.add(digits.zfill(10))
+    return tuple(sorted(candidate_ciks))
 
 
 def parse_iso_date(value: str | None) -> date | None:

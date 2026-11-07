@@ -46,6 +46,29 @@ Telegram:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
+### Reporting-source transitions
+
+The manager `cik` remains the stable identity used for history, weights, and trend signals. If a
+manager files a 13F-NT because another manager now reports its holdings, add an explicit
+`filing_source_periods` entry in `config/managers.json` instead of changing the manager CIK:
+
+```json
+{
+  "name": "Example Fund",
+  "cik": "0000000001",
+  "weight": 1.0,
+  "filing_source_periods": [
+    {"through_quarter": "2026Q1", "source_ciks": ["0000000001"]},
+    {"from_quarter": "2026Q2", "source_ciks": ["0000000002"]}
+  ]
+}
+```
+
+An unmapped 13F-NT creates a deduplicated Telegram review alert and pauses trend summaries.
+The candidate source is never adopted automatically. Composite sources are supported only when
+the period explicitly declares `"overlap_policy": "sum"`; all component filings are then
+required before the canonical snapshot is available.
+
 ### Managers file format
 ```json
 [

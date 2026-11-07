@@ -243,3 +243,51 @@ def test_find_information_table_url_uses_best_valid_xml_from_index(monkeypatch: 
     monkeypatch.setattr(client, "get_text", fake_get_text)
     found = client.find_information_table_url("0001067983", "0001193125-25-282901")
     assert found.endswith("actual_infotable.xml")
+
+
+def test_find_primary_document_url_prefers_primary_named_index_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SecClient(user_agent="test-agent")
+
+    monkeypatch.setattr(
+        client,
+        "get_filing_index",
+        lambda *_args, **_kwargs: [
+            FilingIndexEntry(name="InformationTable.xml", type=None),
+            FilingIndexEntry(name="primary_doc.xml", type=None),
+            FilingIndexEntry(name="zeta.htm", type=None),
+        ],
+    )
+
+    found = client.find_primary_document_url("0001067983", "0001193125-25-282901", None)
+    assert found.endswith("primary_doc.xml")
+
+
+def test_find_primary_document_url_raises_when_no_primary_candidates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SecClient(user_agent="test-agent")
+
+    monkeypatch.setattr(
+        client,
+        "get_filing_index",
+        lambda *_args, **_kwargs: [FilingIndexEntry(name="data.json", type=None)],
+    )
+
+    with pytest.raises(InformationTableNotFoundError, match="Could not locate primary document"):
+        client.find_primary_document_url("0001067983", "0001193125-25-282901", None)
+
+
+def test_find_primary_document_url_uses_explicit_primary_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = SecClient(user_agent="test-agent")
+
+    def fail_index(*_args: object, **_kwargs: object) -> list[FilingIndexEntry]:
+        raise AssertionError("filing index must not be fetched when primary_document is explicit")
+
+    monkeypatch.setattr(client, "get_filing_index", fail_index)
+
+    found = client.find_primary_document_url("0001067983", "0001193125-25-282901", "cover.htm")
+    assert found.endswith("cover.htm")

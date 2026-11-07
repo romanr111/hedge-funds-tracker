@@ -1,62 +1,68 @@
+# Continuity ledger
+
+State lives in repository-root `CONTINUITY.md`. At session start, read it before the first tool call when present. Never duplicate it across worktrees. When needed but missing, create it from `/Users/roman/.claude/templates/CONTINUITY.md`.
+
+## Snapshot triggers
+
+Rewrite the Snapshot after a file modification, decision, new/resolved blocker, or task completion/abandonment. Reading and searching do not trigger a rewrite.
+
+## Prune on every rewrite
+
+- Move completed items to Done (recent), or delete them.
+- Mark stale facts `SUPERSEDED [date]`; delete them on the next rewrite.
+- Remove answered questions and inactive working-set files.
+- Keep receipts only for decisions, commits, PRs, failures, and unusual tool outcomes.
+- If the file exceeds 120 lines, compress Done (recent) into milestone bullets.
+
+Before Git mutations, reconcile the ledger with actual worktree, branch, and status output as defined in `~/.claude/references/git-and-github.md`.
+
 ## Snapshot
 
-- Goal: Restore and complete the curated hedge fund option trend tables feature.
-- Success criteria: option trend code is on `codex/options-trend-tables`, backfill does not skip first-time option rows, XLSX export includes option-only tables, and focused/full/e2e checks pass.
-- Current state: Option feature body is restored on `codex/options-trend-tables`; reviewed backfill/export gaps are patched and validation is green.
-- Next action: Await review, commit, or PR instruction.
-- Open questions:
-- Stale/superseded:
+- Goal: Land the 13F reporting-source transitions feature on `main` via draft PR.
+- Success criteria: branch `reporting-source-transitions` pushed, draft PR open, full local suite green on the new base, CI green, review approval.
+- Current state: draft PR #41 open (`reporting-source-transitions` -> `main`, branch from `origin/main` 8ccb1a7); local suite green on the branch (221 passed); awaiting review/CI.
+- Next action: await PR review and CI; address feedback.
+- Open questions: None.
+- Stale/superseded: CodeGraph-repair details below are historical receipts.
 
 ## Git context
 
 - Repo root: /Users/roman/Documents/Development/Signals
 - Working directory: /Users/roman/Documents/Development/Signals
-- Branch: codex/options-trend-tables
+- Branch: reporting-source-transitions (created from origin/main 8ccb1a7)
 - Base branch: main
-- Merge status: not reviewed for merge after fixes
+- Merge status: not assessed
 
 ## Worktree detail
 
-- Worktree reason: feature branch in primary checkout because the primary worktree is clean.
-- Ownership: option trend computation, storage, CLI/script rendering, XLSX export, related tests, README.md, CONTINUITY.md.
-- Conflicts:
+- Worktree reason: primary checkout; sibling detached worktree exists at `/Users/roman/Documents/Development/hedge_funds_tracker-gdrive-export`.
+- Ownership: reporting-source feature and CodeGraph retirement of this checkout.
+- Conflicts: `data/signals.sqlite3` intentionally left uncommitted (local-run data preserved in the worktree); untracked `reports/` retained; stash `reporting-source feature WIP` retained (content fully applied).
 - Cleanup proof:
 
 ## Working set
 
-- CONTINUITY.md
-- README.md
-- data/signals.sqlite3
-- scripts/show_trends.py
-- tests/test_backfill_trend_history.py
-- tests/test_cli_export_xlsx.py
-- tests/test_cli_portfolio_value_trend.py
-- tests/test_show_trends.py
-- tests/test_trend_engine.py
-- tests/test_xlsx_exporter.py
-- signals/application/use_cases/backfill_trend_history.py
-- signals/application/use_cases/run_trend_engine.py
-- signals/infrastructure/export/xlsx_exporter.py
+- signals/application/use_cases/notify_reporting_source_reviews.py (new)
+- signals/application/use_cases/{sync_quarter_snapshots,track_manager,run_trend_engine,notify_*.py}
 - signals/infrastructure/storage/sqlite_state_repository.py
-- signals/interfaces/cli/main.py
+- signals/config.py, signals/domain/{filings,models}.py
+- tests/test_reporting_source_*.py (new), config/managers.json, README.md
 
 ## Done (recent)
 
-- Detailed review found the option feature was stashed instead of present on the branch.
-- Detailed review found two implementation gaps: backfill pre-skip ignores missing option rows, and XLSX export skips option-only rows.
-- Restored the saved option feature files from `stash@{0}` while keeping the repaired continuity ledger.
-- Added red tests for missing option-row backfill and option-only XLSX export, then patched those paths.
-- Verified focused, affected, full, diff-check, and temporary e2e smoke checks.
+- 2026-11-06 [RESEARCH] Delivered US market-intelligence dashboard research report at `reports/2026-11-06-market-intelligence-research-uk.md`; three subagent web-research reports synthesized; values date-stamped 2026-11-06; no code, schema, or service changes; concurrent reporting-source work untouched.
+- 2026-11-06 Self-QA of the uncommitted feature: read-only review, no edits; full suite 220 passed in 166.86s on the pre-rebase tree; only low-severity findings.
+- 2026-11-06 Moved the uncommitted set onto origin/main 8ccb1a7: `.gitignore` merged as union, local DB conflict resolved from byte-exact backup, duplicate `now_fn` pinning in `tests/test_sync_quarter_snapshots.py` resolved to origin's identical version.
+- 2026-07-26 [TOOL] Retired CodeGraph: removed the user-local installation, MCP registrations, local index, bootstrap scripts, and active routing instructions.
+- 2026-05-24 Option trend tables landed after stash-restore and backfill/XLSX export gap fixes.
 
 ## Receipts
 
-- 2026-05-24: `git worktree list` showed only `/Users/roman/Documents/Development/Signals`; `git status --short` was clean on `main`.
-- 2026-05-24: Switched to `codex/options-trend-tables`; branch was clean before restoring stashed feature work.
-- 2026-05-24: Focused red run for backfill and option-only XLSX export failed with `2 failed`, matching the reviewed gaps.
-- 2026-05-24: Focused green run passed with `2 passed in 0.46s`.
-- 2026-05-24: Affected suite passed with `78 passed in 1.39s`.
-- 2026-05-24: Full suite passed with `183 passed in 18.00s`.
-- 2026-05-24: Temporary e2e smoke passed: signals backfill CLI restored missing option rows, `python -m signals --show-trends-only` and `scripts/show_trends.py` rendered option sections, and option-only XLSX export produced `Call Option Trends`.
-- 2026-05-24: `git diff --check` passed.
-- 2026-05-24: Reset and switched `codex/options-trend-tables` to current `main` tip `0f935c3` while preserving the uncommitted feature diff.
-- 2026-06-15: Fixed Actions run `27538230507` failure by restoring CLI heading `Signals Portfolio Value Trend (QoQ)` in `signals/interfaces/cli/main.py`; focused tests passed (`2 passed in 0.32s`) and full local pipeline-equivalent pytest passed (`194 passed in 15.30s`). GitHub run `27541478950` was green only because schedule-gated steps were skipped.
+- 2026-11-07: PR #41 review round 2 (8bfe687 fix + a3a8b11 test): quarter-scoped review gates (latest trends + summary), resumption quarter-break against composite accession churn, no review creation on transient submissions fetch failure. Focused suites: 37 passed (26 seam + 11 CLI). Full suite: 239 passed in 1005.93s - merge gate passed.
+- 2026-11-06: PR #41 review fixes (F1+F4): composite-source helpers centralized in `signals/domain/filing_sources.py` (34f229b); 13 seam tests added (891fd4d, 4 files); full suite 234 passed in 1005.92s on the branch.
+- 2026-11-06: origin/main ran 50 DB-chore commits plus workflow/`.gitignore`/test changes ahead of local `main` (e8c81bd); branch was created from 8ccb1a7, not the stale local tip.
+- 2026-11-06: Draft PR #41 opened: https://github.com/romanr111/hedge-funds-tracker/pull/41 (verified OPEN/draft, base main). Commits: 75354db chore codegraph, 7c47cb8 feat reporting-source, dfb8255 ledger.
+- 2026-11-06: `pytest -q`: 220 passed in 166.86s on the pre-rebase tree; on the branch base: 221 passed in 1012.16s (slow run under concurrent subagent load).
+- 2026-11-06: Local DB backup: /tmp/signals-preserv/signals-local-20261106.sqlite3 (7.8M, byte-matched after conflict resolution).
+- 2026-07-25: CodeGraph index rebuild: 99 files, 1,608 nodes, 3,775 edges; global install attempts failed with EPERM (Homebrew Cellar, ~/.codegraph).
+- 2026-06-15: Restored CLI heading fix for Actions run 27538230507; full local pipeline-equivalent pytest 194 passed in 15.30s.

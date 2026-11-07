@@ -53,6 +53,14 @@ def notify_trend_analysis_summary(
     if dry_run or not notifiers or report_quarter is None:
         return
 
+    review_checker = getattr(store, "has_open_reporting_source_reviews", None)
+    if callable(review_checker) and review_checker(list(manager_ciks), [report_quarter]):
+        app_logger.info(
+            "Trend analysis summary notification skipped",
+            extra={"status": "reporting_source_review_required", "report_quarter": report_quarter},
+        )
+        return
+
     if not _is_notifiable_status(trend_status):
         app_logger.info(
             "Trend analysis summary notification skipped",

@@ -4,10 +4,18 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Sequence, cast
 
 from signals.domain.exceptions import StateStoreError
-from signals.domain.models import ManagerQuarterSnapshot, ManagerState, Position, TrendRun, TrendStockSignal
+from signals.domain.models import (
+    ManagerQuarterSnapshot,
+    ManagerState,
+    Position,
+    ReportingSourceReview,
+    SnapshotSourceFiling,
+    TrendRun,
+    TrendStockSignal,
+)
 
 
 class StateStore:
@@ -65,6 +73,44 @@ class StateStore:
             """
             CREATE INDEX IF NOT EXISTS idx_snapshot_report_quarter
             ON manager_quarter_snapshot(report_quarter)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manager_quarter_snapshot_source (
+                cik TEXT NOT NULL,
+                report_quarter TEXT NOT NULL,
+                source_cik TEXT NOT NULL,
+                accession TEXT NOT NULL,
+                source_form TEXT NOT NULL,
+                filing_date TEXT,
+                acceptance_datetime TEXT,
+                PRIMARY KEY (cik, report_quarter, source_cik)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS reporting_source_review (
+                manager_cik TEXT NOT NULL,
+                report_quarter TEXT NOT NULL,
+                manager_name TEXT NOT NULL,
+                notice_accession TEXT NOT NULL,
+                notice_filing_date TEXT,
+                candidate_ciks_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                notified_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                resolved_at TEXT,
+                PRIMARY KEY (manager_cik, report_quarter)
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_reporting_source_review_status
+            ON reporting_source_review(status, report_quarter)
             """
         )
         self._conn.execute(
@@ -340,11 +386,21 @@ class StateStore:
         source_form: str,
         positions: list[Position],
         aum_value_k: int,
+        source_filings: Sequence[SnapshotSourceFiling] = (),
     ) -> None:
         try:
             updated_at = datetime.now(timezone.utc).isoformat()
             positions_json = json.dumps(positions, separators=(",", ":"), ensure_ascii=True)
             positions_count = len(positions)
+            normalized_sources = tuple(source_filings) or (
+                SnapshotSourceFiling(
+                    source_cik=cik,
+                    accession=accession,
+                    source_form=source_form,
+                    filing_date=filing_date,
+                    acceptance_datetime=acceptance_datetime,
+                ),
+            )
             self._conn.execute(
                 """
                 INSERT INTO manager_quarter_snapshot (
@@ -378,11 +434,59 @@ class StateStore:
                     updated_at,
                 ),
             )
+            self._conn.execute(
+                """
+                DELETE FROM manager_quarter_snapshot_source
+                WHERE cik = ? AND report_quarter = ?
+                """,
+                (cik, report_quarter),
+            )
+            self._conn.executemany(
+                """
+                INSERT INTO manager_quarter_snapshot_source (
+                    cik, report_quarter, source_cik, accession, source_form,
+                    filing_date, acceptance_datetime
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        cik,
+                        report_quarter,
+                        source.source_cik,
+                        source.accession,
+                        source.source_form,
+                        source.filing_date,
+                        source.acceptance_datetime,
+                    )
+                    for source in normalized_sources
+                ],
+            )
             self._conn.commit()
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise StateStoreError(
                 f"Failed to upsert manager quarter snapshot for CIK {cik}, quarter {report_quarter}: {exc}"
             ) from exc
+
+    def _source_filings_for_snapshot(self, cik: str, report_quarter: str) -> tuple[SnapshotSourceFiling, ...]:
+        rows = self._conn.execute(
+            """
+            SELECT source_cik, accession, source_form, filing_date, acceptance_datetime
+            FROM manager_quarter_snapshot_source
+            WHERE cik = ? AND report_quarter = ?
+            ORDER BY source_cik ASC
+            """,
+            (cik, report_quarter),
+        ).fetchall()
+        return tuple(
+            SnapshotSourceFiling(
+                source_cik=source_row["source_cik"],
+                accession=source_row["accession"],
+                source_form=source_row["source_form"],
+                filing_date=source_row["filing_date"],
+                acceptance_datetime=source_row["acceptance_datetime"],
+            )
+            for source_row in rows
+        )
 
     def _row_to_snapshot(self, row: sqlite3.Row) -> ManagerQuarterSnapshot:
         try:
@@ -394,6 +498,17 @@ class StateStore:
         if not isinstance(positions_raw, list):
             raise StateStoreError(
                 f"Invalid positions payload type for CIK {row['cik']}, quarter {row['report_quarter']}"
+            )
+        source_filings = self._source_filings_for_snapshot(row["cik"], row["report_quarter"])
+        if not source_filings:
+            source_filings = (
+                SnapshotSourceFiling(
+                    source_cik=row["cik"],
+                    accession=row["accession"],
+                    source_form=row["source_form"],
+                    filing_date=row["filing_date"],
+                    acceptance_datetime=row["acceptance_datetime"],
+                ),
             )
         return ManagerQuarterSnapshot(
             cik=row["cik"],
@@ -408,7 +523,176 @@ class StateStore:
             aum_value_k=int(row["aum_value_k"]),
             positions_count=int(row["positions_count"]),
             updated_at=row["updated_at"],
+            source_filings=source_filings,
         )
+
+    def upsert_reporting_source_review(
+        self,
+        *,
+        manager_cik: str,
+        manager_name: str,
+        report_quarter: str,
+        notice_accession: str,
+        notice_filing_date: str | None,
+        candidate_ciks: Sequence[str],
+    ) -> None:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            candidates_json = json.dumps(sorted(set(candidate_ciks)), separators=(",", ":"))
+            self._conn.execute(
+                """
+                INSERT INTO reporting_source_review (
+                    manager_cik, report_quarter, manager_name, notice_accession,
+                    notice_filing_date, candidate_ciks_json, status, notified_at,
+                    created_at, updated_at, resolved_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'open', NULL, ?, ?, NULL)
+                ON CONFLICT(manager_cik, report_quarter) DO UPDATE SET
+                    manager_name = excluded.manager_name,
+                    notice_accession = excluded.notice_accession,
+                    notice_filing_date = excluded.notice_filing_date,
+                    candidate_ciks_json = excluded.candidate_ciks_json,
+                    status = 'open',
+                    notified_at = CASE
+                        WHEN reporting_source_review.notice_accession != excluded.notice_accession
+                          OR reporting_source_review.candidate_ciks_json != excluded.candidate_ciks_json
+                        THEN NULL
+                        ELSE reporting_source_review.notified_at
+                    END,
+                    updated_at = excluded.updated_at,
+                    resolved_at = NULL
+                """,
+                (
+                    manager_cik,
+                    report_quarter,
+                    manager_name,
+                    notice_accession,
+                    notice_filing_date,
+                    candidates_json,
+                    now_iso,
+                    now_iso,
+                ),
+            )
+            self._conn.commit()
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise StateStoreError(
+                f"Failed to upsert reporting source review for CIK {manager_cik}, quarter {report_quarter}: {exc}"
+            ) from exc
+
+    def resolve_reporting_source_review(self, manager_cik: str, report_quarter: str) -> None:
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._conn.execute(
+                """
+                UPDATE reporting_source_review
+                SET status = 'resolved', updated_at = ?, resolved_at = ?
+                WHERE manager_cik = ? AND report_quarter = ? AND status = 'open'
+                """,
+                (now_iso, now_iso, manager_cik, report_quarter),
+            )
+            self._conn.commit()
+        except sqlite3.Error as exc:
+            raise StateStoreError(
+                f"Failed to resolve reporting source review for CIK {manager_cik}, quarter {report_quarter}: {exc}"
+            ) from exc
+
+    def _row_to_reporting_source_review(self, row: sqlite3.Row) -> ReportingSourceReview:
+        try:
+            candidates = json.loads(row["candidate_ciks_json"])
+        except json.JSONDecodeError as exc:
+            raise StateStoreError(
+                f"Invalid candidate CIKs for reporting source review {row['manager_cik']}, {row['report_quarter']}: {exc}"
+            ) from exc
+        if not isinstance(candidates, list) or not all(isinstance(candidate, str) for candidate in candidates):
+            raise StateStoreError(
+                f"Invalid candidate CIKs payload for reporting source review {row['manager_cik']}, {row['report_quarter']}"
+            )
+        return ReportingSourceReview(
+            manager_cik=row["manager_cik"],
+            manager_name=row["manager_name"],
+            report_quarter=row["report_quarter"],
+            notice_accession=row["notice_accession"],
+            notice_filing_date=row["notice_filing_date"],
+            candidate_ciks=tuple(candidates),
+            status=row["status"],
+            notified_at=row["notified_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            resolved_at=row["resolved_at"],
+        )
+
+    def list_open_reporting_source_reviews(self) -> list[ReportingSourceReview]:
+        try:
+            rows = self._conn.execute(
+                """
+                SELECT *
+                FROM reporting_source_review
+                WHERE status = 'open'
+                ORDER BY report_quarter ASC, manager_name ASC, manager_cik ASC
+                """
+            ).fetchall()
+            return [self._row_to_reporting_source_review(row) for row in rows]
+        except sqlite3.Error as exc:
+            raise StateStoreError(f"Failed to list reporting source reviews: {exc}") from exc
+
+    def list_unnotified_reporting_source_reviews(self) -> list[ReportingSourceReview]:
+        return [
+            review
+            for review in self.list_open_reporting_source_reviews()
+            if review.notified_at is None
+        ]
+
+    def mark_reporting_source_reviews_notified(
+        self,
+        reviews: Sequence[ReportingSourceReview],
+    ) -> None:
+        if not reviews:
+            return
+        try:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._conn.executemany(
+                """
+                UPDATE reporting_source_review
+                SET notified_at = ?, updated_at = ?
+                WHERE manager_cik = ? AND report_quarter = ? AND status = 'open'
+                """,
+                [
+                    (now_iso, now_iso, review.manager_cik, review.report_quarter)
+                    for review in reviews
+                ],
+            )
+            self._conn.commit()
+        except sqlite3.Error as exc:
+            raise StateStoreError(f"Failed to mark reporting source reviews notified: {exc}") from exc
+
+    def has_open_reporting_source_reviews(
+        self,
+        manager_ciks: Sequence[str],
+        report_quarters: Sequence[str] | None = None,
+    ) -> bool:
+        if not manager_ciks:
+            return False
+        cik_placeholders = ",".join("?" for _ in manager_ciks)
+        quarter_filter = ""
+        parameters: tuple[str, ...] = tuple(manager_ciks)
+        if report_quarters:
+            quarter_placeholders = ",".join("?" for _ in report_quarters)
+            quarter_filter = f" AND report_quarter IN ({quarter_placeholders})"
+            parameters += tuple(report_quarters)
+        try:
+            row = self._conn.execute(
+                f"""
+                SELECT 1
+                FROM reporting_source_review
+                WHERE status = 'open'
+                  AND manager_cik IN ({cik_placeholders})
+                  {quarter_filter}
+                LIMIT 1
+                """,
+                parameters,
+            ).fetchone()
+            return row is not None
+        except sqlite3.Error as exc:
+            raise StateStoreError(f"Failed to check reporting source reviews: {exc}") from exc
 
     def get_manager_quarter_snapshot(self, cik: str, report_quarter: str) -> ManagerQuarterSnapshot | None:
         try:
@@ -765,6 +1049,8 @@ class StateStore:
         try:
             cursor_state = self._conn.execute("DELETE FROM manager_state")
             cursor_snapshot = self._conn.execute("DELETE FROM manager_quarter_snapshot")
+            cursor_snapshot_source = self._conn.execute("DELETE FROM manager_quarter_snapshot_source")
+            cursor_source_review = self._conn.execute("DELETE FROM reporting_source_review")
             cursor_trend_run = self._conn.execute("DELETE FROM trend_run")
             cursor_trend_signal = self._conn.execute("DELETE FROM trend_stock_signal")
             cursor_option_signal = self._conn.execute("DELETE FROM trend_option_signal")
@@ -772,6 +1058,8 @@ class StateStore:
             return (
                 cursor_state.rowcount
                 + cursor_snapshot.rowcount
+                + cursor_snapshot_source.rowcount
+                + cursor_source_review.rowcount
                 + cursor_trend_run.rowcount
                 + cursor_trend_signal.rowcount
                 + cursor_option_signal.rowcount
