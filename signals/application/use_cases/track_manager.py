@@ -26,7 +26,7 @@ from signals.domain.filings import (
 from signals.domain.formatting import format_report_period, format_subject
 from signals.domain.models import Filing, Manager, Position
 from signals.domain.parsing import parse_infotable
-from signals.domain.quarters import report_quarter_from_iso_date
+from signals.domain.quarters import quarter_sort_key, report_quarter_from_iso_date
 from signals.domain.timing import now_kyiv
 from signals.domain.trends import aggregate_positions_by_instrument
 
@@ -186,6 +186,7 @@ def process_manager(
 
     state = store.get_state(manager.cik)
     last_accession = state.last_accession if state else None
+    last_processed_quarter = report_quarter_from_iso_date(state.last_report_date) if state else None
     last_notified_accession = state.last_notified_accession if state else None
     new_filing_batches: list[_FilingBatch] = []
 
@@ -194,6 +195,16 @@ def process_manager(
         new_filing_batches = filing_batches[:1]
     else:
         for filing_batch in filing_batches:
+            batch_quarter = report_quarter_from_iso_date(filing_batch.filing.report_date)
+            # Composite accessions are content-derived: they change (amendments) or vanish
+            # (transient source fetch failures) without a real new filing. A batch whose
+            # report quarter is older than the last processed quarter is therefore never new.
+            if (
+                last_processed_quarter is not None
+                and batch_quarter is not None
+                and quarter_sort_key(batch_quarter) < quarter_sort_key(last_processed_quarter)
+            ):
+                break
             if last_accession and filing_batch.filing.accession == last_accession:
                 break
             new_filing_batches.append(filing_batch)

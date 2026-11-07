@@ -120,10 +120,12 @@ def sync_quarter_snapshots(
         )
 
         submissions_by_cik: dict[str, dict[str, object]] = {}
+        failed_fetch_ciks: set[str] = set()
         for source_cik in all_possible_source_ciks(manager):
             try:
                 submissions_by_cik[source_cik] = client.get_all_submissions(source_cik)
             except SubmissionsFetchError as exc:
+                failed_fetch_ciks.add(source_cik)
                 app_logger.warning(
                     "Skipping filing source due to submissions error",
                     extra={
@@ -189,6 +191,20 @@ def sync_quarter_snapshots(
                 )
 
             if len(selected_filings) != len(expected_source_ciks):
+                failed_approved_sources = sorted(failed_fetch_ciks & set(expected_source_ciks))
+                if failed_approved_sources:
+                    # An incomplete quarter caused by a transient submissions fetch failure is
+                    # not a reporting-source transition: do not open a false human review.
+                    app_logger.warning(
+                        "Quarter snapshot skipped due to source submissions fetch failure",
+                        extra={
+                            "manager": manager.name,
+                            "cik": manager.cik,
+                            "report_quarter": report_quarter,
+                            "failed_source_ciks": failed_approved_sources,
+                        },
+                    )
+                    continue
                 notices = notice_filings_by_quarter.get(report_quarter, [])
                 if notices:
                     notice = max(

@@ -483,14 +483,17 @@ def run_trend_engine_for_latest_completed_quarter(
     if not managers:
         return TrendEngineResult(status="no_managers", report_quarter=None, signals_count=0)
 
-    if _has_open_reporting_source_reviews(store, [manager.cik for manager in managers]):
-        app_logger.info("Trend engine pending: reporting source review")
-        return TrendEngineResult(status="pending_reporting_source_review", report_quarter=None, signals_count=0)
-
     target_quarter = detect_latest_completed_report_quarter(managers, store)
     if target_quarter is None:
         app_logger.info("Trend engine pending: no completed report quarter for all managers")
         return TrendEngineResult(status="pending_no_completed_quarter", report_quarter=None, signals_count=0)
+
+    if _has_open_reporting_source_reviews(store, [manager.cik for manager in managers], [target_quarter]):
+        app_logger.info(
+            "Trend engine pending: reporting source review",
+            extra={"target_quarter": target_quarter},
+        )
+        return TrendEngineResult(status="pending_reporting_source_review", report_quarter=None, signals_count=0)
 
     return run_trend_engine_for_target_quarter(
         managers,
