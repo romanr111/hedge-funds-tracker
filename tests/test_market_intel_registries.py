@@ -189,3 +189,11 @@ def test_gateway_knobs_are_present_per_source() -> None:
 def test_mapping_is_immutable_mapping_proxy() -> None:
     with pytest.raises(TypeError):
         SERIES_SPECS["new_key"] = SERIES_SPECS["spx"]  # type: ignore[index]
+
+
+def test_registry_pins_compute_consume_keys() -> None:
+    """compute_dashboard consumes margin_yoy and netliq_tbn; the shipped
+    registry must keep their specs (2026-11-07 review: the missing entries
+    silently disabled one sentiment and one macro member)."""
+    assert "margin_yoy" in SERIES_SPECS
+    assert "netliq_tbn" in SERIES_SPECS
