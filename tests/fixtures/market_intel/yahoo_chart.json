@@ -1,0 +1,1 @@
+{"chart":{"result":[{"meta":{"currency":"USD","symbol":"^GSPC","exchangeTimezoneName":"America/New_York","regularMarketPrice":99.0,"gmtoffset":-18000,"timezone":"EST"},"timestamp":[1735830000,1735916400,1736175600,1736262000],"indicators":{"quote":[{"close":[100.5,null,101.25,99.0]}],"adjclose":[{"close":[100.5,null,101.25,99.0]}]}}],"error":null}}

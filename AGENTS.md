@@ -13,6 +13,13 @@ A Python CLI application that tracks hedge fund 13F filings from the U.S. Securi
 
 The project follows a layered architecture (ports-and-adapters / clean architecture) with explicit separation between domain logic, application use cases, and infrastructure concerns.
 
+### Market Intel submodule
+
+`market_intel/` is a separate CLI (`python -m market_intel`), not part of the
+`signals` pipeline. Read `market_intel/AGENTS.md` (mirrored as
+`market_intel/CLAUDE.md`) before changing it. Focused tests:
+`python -m pytest tests/test_market_intel_*.py -q`.
+
 ## Technology Stack
 
 - **Language:** Python 3.11+ (CI targets 3.11; local development works on newer versions).
@@ -197,7 +204,7 @@ Configuration is environment-driven. The app auto-loads `.env` from the repo roo
 - Domain logic in `signals/domain/` must remain pure (no I/O, no external dependencies).
 - Application use cases in `signals/application/use_cases/` orchestrate domain logic and call ports.
 - Infrastructure in `signals/infrastructure/` implements port protocols.
-- The CLI in `signals/interfaces/cli/main.py` is the only place that should contain argparse, `print()`, and user-facing formatting.
+- The CLI in `signals/interfaces/cli/main.py` is the only place in the `signals` package that should contain argparse, `print()`, and user-facing formatting. `market_intel/interfaces/cli/main.py` owns those concerns for its own CLI.
 - Legacy root-level modules (`parse_13f.py`, `sec_client.py`, `diff.py`, `notifiers.py`, `storage.py`) are re-export-only shims. Do not add new logic there; put it in the layered packages.
 - Logging is structured JSON. Use `extra={...}` on log calls. A `trace_id` contextvar is propagated automatically when `log_context()` is used.
 - Defensive input validation at config boundaries; raise domain-specific exceptions (`SignalsError` subclasses) rather than leaking raw library exceptions upward.
@@ -209,7 +216,8 @@ Configuration is environment-driven. The app auto-loads `.env` from the repo roo
 - Tests use `tmp_path` and `monkeypatch` fixtures extensively.
 - Storage tests create temporary SQLite databases via `tmp_path`.
 - When testing config, clear environment variables first using a helper like `_clear_config_env(monkeypatch)` to avoid leakage from the host or `.env` file.
-- The CI test count as of the latest verified run: 194 tests.
+- Focused market_intel suite (offline): `python -m pytest tests/test_market_intel_*.py -q` - 17 files, 183 tests as of 2026-11-20.
+- Full repository suite as of the latest verified run (2026-11-20): 428 tests.
 
 ## Architecture Decisions
 
@@ -258,6 +266,6 @@ The trend engine computes an `input_fingerprint` (SHA-256 of normalized snapshot
 - When adding a new use case, place it in `signals/application/use_cases/`, keep it free of CLI concerns, and inject ports.
 - When adding a new model, use `dataclass(frozen=True)` in `signals/domain/models.py`.
 - When adding a new exception, subclass `SignalsError` in `signals/domain/exceptions.py`.
-- When changing the CLI, update `signals/interfaces/cli/main.py` and add corresponding tests in `tests/test_cli_*.py`.
+- When changing the CLI, update `signals/interfaces/cli/main.py` and add corresponding tests in `tests/test_cli_*.py`; for `market_intel`, follow `market_intel/AGENTS.md`.
 - When changing the database schema, update `sqlite_state_repository.py` schema creation and migration methods, and verify with existing tests.
 - When adding a new notifier, implement the `Notifier` interface in `signals/infrastructure/notify/notifiers.py` and register a builder in `DEFAULT_NOTIFIER_BUILDERS`.

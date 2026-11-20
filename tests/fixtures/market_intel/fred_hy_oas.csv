@@ -1,0 +1,10 @@
+% Real FRED fredgraph.csv payload (series BAMLH0A0HYM2), captured 2026-11-07 and
+% trimmed to the header plus the most recent rows. Missing observations appear
+% as empty values or a literal '.'; the parser skips non-date rows.
+observation_date,BAMLH0A0HYM2
+2026-10-29,3.26
+2026-10-30,3.44
+2026-11-02,3.43
+2026-11-03,3.40
+2026-11-04,3.32
+2026-11-05,3.48
