@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -79,6 +80,36 @@ def load_symbol_map(path: Path) -> dict[str, str]:
     return mapping
 
 
+_CUSIP_PATTERN = re.compile(r"^[0-9A-Z]{8}[0-9]$")
+_ISSUER_SUFFIXES = (" COM NEW", " COM", " CL A", " CL B", " CL C", " NEW", " CLASS A", " CLASS B")
+
+
+def _looks_like_cusip(value: str) -> bool:
+    candidate = (value or "").strip().upper()
+    if not _CUSIP_PATTERN.match(candidate):
+        return False
+    return sum(char.isdigit() for char in candidate) >= 3
+
+
+def _issuer_display_name(value: str | None, *, limit: int = 26) -> str:
+    if not value:
+        return ""
+    name = " ".join(str(value).split())
+    upper = name.upper()
+    for suffix in _ISSUER_SUFFIXES:
+        if upper.endswith(suffix):
+            name = name[: len(name) - len(suffix)]
+            upper = name.upper()
+            break
+    name = name.strip(" ,.-")
+    if not name:
+        return ""
+    display = " ".join(word.capitalize() for word in name.split())
+    if len(display) > limit:
+        display = display[: limit - 1].rstrip(" ,.-") + "…"
+    return display
+
+
 def _ticker_for_signal(signal: TrendStockSignal, symbol_map: Mapping[str, str]) -> str:
     keys = [
         (signal.instrument_key or "").strip().upper(),
@@ -87,6 +118,12 @@ def _ticker_for_signal(signal: TrendStockSignal, symbol_map: Mapping[str, str]) 
     for key in keys:
         if key and key in symbol_map:
             return symbol_map[key]
+    for key in keys:
+        if key and not _looks_like_cusip(key):
+            return key
+    issuer_name = _issuer_display_name(getattr(signal, "issuer_name", None))
+    if issuer_name:
+        return issuer_name
     for key in keys:
         if key:
             return key

@@ -34,6 +34,7 @@ concurrency:
 jobs:
   run-signals:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Schedule gate (Kyiv DST schedule selection)
@@ -210,12 +211,12 @@ jobs:
                 echo "Pushed state update to ${target_branch}."
                 exit 0
               fi
-              echo "Push failed on attempt ${attempt}. Rebasing onto origin/${target_branch}..."
+              echo "Push failed on attempt ${attempt}. Rebuilding commit on top of origin/${target_branch}..."
               git fetch origin "${target_branch}"
-              if ! git rebase "origin/${target_branch}"; then
-                git rebase --abort || true
-                echo "Rebase conflict while updating signals state."
-                exit 1
+              git reset --soft "origin/${target_branch}"
+              git add -f data/signals.sqlite3
+              if ! git diff --staged --quiet; then
+                git commit -m "chore: update signals state [skip ci]"
               fi
             done
             echo "Failed to push state update after retries."
