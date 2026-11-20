@@ -86,27 +86,22 @@ def _spec(key: str) -> SeriesSpec:
 # --- http_base ------------------------------------------------------------
 
 
-def test_request_retries_rate_limit_then_succeeds() -> None:
+def test_request_retry_and_failure_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    recorded: list[float] = []
+    monkeypatch.setattr(http_base.time, "sleep", recorded.append)
+
+    # 429 then 503 then success.
     session = _FakeSession([
         _FakeResponse(status_code=429, headers={"Retry-After": "0"}),
         _FakeResponse(status_code=503, headers={"Retry-After": "0"}),
         _FakeResponse('{"ok": true}'),
     ])
     gateway = FredCsvGateway(session=session, min_interval_seconds=0.0)
-    payload = gateway._get_json("https://example.test/x")
-    assert payload == {"ok": True}
+    assert gateway._get_json("https://example.test/x") == {"ok": True}
     assert len(session.calls) == 3
 
-
-def test_request_honors_retry_after_without_sleeping_hardcoded_backoff(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    recorded: list[float] = []
-
-    def fake_sleep(seconds: float) -> None:
-        recorded.append(seconds)
-
-    monkeypatch.setattr(http_base.time, "sleep", fake_sleep)
+    # Retry-After is honored; no hardcoded backoff is added on rate limits.
+    recorded.clear()
     session = _FakeSession([
         _FakeResponse(status_code=429, headers={"Retry-After": "7"}),
         _FakeResponse("ok"),
@@ -115,8 +110,8 @@ def test_request_honors_retry_after_without_sleeping_hardcoded_backoff(
     assert gateway._get_text("https://example.test/x") == "ok"
     assert recorded == [7]
 
-
-def test_request_raises_rate_limit_exceeded_after_attempts() -> None:
+    # Exhausting retries on 429 raises the structured error.
+    recorded.clear()
     session = _FakeSession([
         _FakeResponse(status_code=429, headers={"Retry-After": "0"}),
         _FakeResponse(status_code=429, headers={"Retry-After": "0"}),
@@ -128,9 +123,11 @@ def test_request_raises_rate_limit_exceeded_after_attempts() -> None:
     assert exc_info.value.attempts == 3
     assert isinstance(exc_info.value, CollectorError)
     assert len(session.calls) == 3
+    assert recorded == [0, 0]
 
+    # Transport errors back off 1s then 2s and surface as CollectorError.
+    recorded.clear()
 
-def test_request_wraps_repeated_request_exception() -> None:
     class _BrokenSession:
         headers: dict[str, str] = {}
 
@@ -140,6 +137,7 @@ def test_request_wraps_repeated_request_exception() -> None:
     gateway = FredCsvGateway(session=_BrokenSession(), min_interval_seconds=0.0)  # type: ignore[arg-type]
     with pytest.raises(CollectorError, match="Failed to fetch"):
         gateway._get_text("https://example.test/x")
+    assert recorded == [1, 2]
 
 
 # --- FRED ------------------------------------------------------------------
@@ -197,6 +195,21 @@ def test_fred_gateway_rejects_wrong_header_and_wrong_source() -> None:
         gateway.fetch(SERIES_SPECS["spx"], now_utc=_utc(2026, 11, 7, 7))
 
 
+def test_fred_gateway_rejects_headerless_and_header_only_payloads() -> None:
+    # A 200 that is not a FRED CSV (an error page, an interstitial) must not
+    # register as a successful fetch with zero observations.
+    session = _FakeSession([
+        _FakeResponse("Just an error page, no CSV"),
+        _FakeResponse("observation_date,BAMLH0A0HYM2\n2026-11-05,."),
+    ])
+    gateway = FredCsvGateway(session=session, min_interval_seconds=0.0)
+
+    with pytest.raises(CollectorError, match="missing observation_date header"):
+        gateway.fetch(_spec("hy_oas"), now_utc=_utc(2026, 11, 7, 7))
+    with pytest.raises(CollectorError, match="no parsable observations"):
+        gateway.fetch(_spec("hy_oas"), now_utc=_utc(2026, 11, 7, 7))
+
+
 # --- Yahoo -----------------------------------------------------------------
 
 
@@ -215,14 +228,20 @@ def test_yahoo_gateway_parses_fixture_dropping_incomplete_last_bar() -> None:
     # Observations must land under the registry key, not the Yahoo symbol.
     assert {o.series_id for o in observations} == {"spx"}
 
-
-def test_yahoo_gateway_keeps_last_bar_after_market_close() -> None:
+    # Registry key != Yahoo symbol (^VIX3M): the request path is URL-encoded
+    # and the stored series id stays spec.key.
     session = _FakeSession([_FakeResponse(_fixture("yahoo_chart.json"))])
     gateway = YahooChartGateway(session=session, min_interval_seconds=0.0)
+    vix3m = gateway.fetch(_spec("vix3m"), now_utc=_utc(2025, 1, 7, 22, 30))
+    assert {o.series_id for o in vix3m} == {"vix3m"}
+    assert session.calls[0]["url"].endswith("/chart/%5EVIX3M")
+    assert session.calls[0]["params"] == {"range": "5y", "interval": "1d"}
 
-    observations = gateway.fetch(_spec("spx"), now_utc=_utc(2025, 1, 7, 22, 30))
-
-    assert [(o.obs_date, o.value) for o in observations] == [
+    # After the market close the same last bar is a complete session and kept.
+    session = _FakeSession([_FakeResponse(_fixture("yahoo_chart.json"))])
+    gateway = YahooChartGateway(session=session, min_interval_seconds=0.0)
+    closed = gateway.fetch(_spec("spx"), now_utc=_utc(2025, 1, 7, 22, 30))
+    assert [(o.obs_date, o.value) for o in closed] == [
         (date(2025, 1, 2), 100.5),
         (date(2025, 1, 6), 101.25),
         (date(2025, 1, 7), 99.0),
@@ -262,16 +281,6 @@ def test_yahoo_gateway_rejects_bad_payload_shape_and_missing_symbol() -> None:
         gateway.fetch(spec, now_utc=_utc(2025, 1, 7, 19))
 
 
-def test_yahoo_gateway_encodes_symbol_in_path() -> None:
-    session = _FakeSession([_FakeResponse(_fixture("yahoo_chart.json"))])
-    gateway = YahooChartGateway(session=session, min_interval_seconds=0.0)
-    observations = gateway.fetch(_spec("vix3m"), now_utc=_utc(2025, 1, 7, 22, 30))
-    # Registry key != Yahoo symbol (^VIX3M): the stored series id is spec.key.
-    assert {o.series_id for o in observations} == {"vix3m"}
-    assert session.calls[0]["url"].endswith("/chart/%5EVIX3M")
-    assert session.calls[0]["params"] == {"range": "5y", "interval": "1d"}
-
-
 # --- multpl ----------------------------------------------------------------
 
 
@@ -298,13 +307,12 @@ def test_multpl_gateway_parses_current_and_month_end_history() -> None:
     assert {o.series_id for o in observations} == {"cape"}
     assert len(session.calls) == 2
 
-
-def test_multpl_gateway_history_collapses_same_month_to_freshest_print() -> None:
+    # The same-month history row collapses to the freshest print.
     from market_intel.infrastructure.multpl_gateway import parse_monthly_history
 
     points = parse_monthly_history(_fixture("multpl_history.html"), fetched_on=date(2026, 12, 10))
     assert points[-1] == (date(2026, 11, 30), 38.91)  # Nov 6 daily print beats Nov 1 monthly
-    assert [p for p in points][-2] == (date(2026, 10, 31), 40.60)
+    assert points[-2] == (date(2026, 10, 31), 40.60)
 
 
 def test_multpl_gateway_raises_without_current_value() -> None:
@@ -354,8 +362,7 @@ def test_cnn_gateway_parses_latest_score_with_timestamp_date() -> None:
     assert observations[0].obs_date == date(2026, 11, 6)  # timestamp -> US date
     assert session.headers["User-Agent"].startswith("Mozilla/5.0")
 
-
-def test_cnn_gateway_prefers_fetched_on_and_defaults_to_us_today() -> None:
+    # An explicit fetched_on field wins; otherwise the US trading date of now_utc.
     payload = '{"fear_and_greed": {"score": 31.5, "fetched_on": "2026-11-05T10:00:00-05:00"}}'
     session = _FakeSession([_FakeResponse(payload)])
     gateway = CnnFgGateway(session=session, min_interval_seconds=0.0)
@@ -379,6 +386,15 @@ def test_cnn_gateway_prefers_fetched_on_and_defaults_to_us_today() -> None:
 def test_factset_gateway_uses_direct_pdf_response_with_pdftotext(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    written: list[str] = []
+    real_tmp = factset_module.tempfile.NamedTemporaryFile
+
+    def recording_tmp(*args: Any, **kwargs: Any) -> Any:
+        handle = real_tmp(*args, **kwargs)
+        written.append(handle.name)
+        return handle
+
+    monkeypatch.setattr(factset_module.tempfile, "NamedTemporaryFile", recording_tmp)
     pdf_fixture = _fixture("factset_forward_pe.txt")
 
     def fake_run(pdf_path: str, **kwargs: Any) -> str:
@@ -405,26 +421,32 @@ def test_factset_gateway_uses_direct_pdf_response_with_pdftotext(
     # over the injected clock: a re-run of the same report dedupes cleanly.
     assert observations[0].obs_date == date(2026, 11, 6)
 
+    # The temp PDF is deleted after parsing.
+    assert written, "gateway must write a temp pdf"
+    assert all(not Path(name).exists() for name in written)
 
-def test_factset_gateway_follows_pdf_link_from_landing_page(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    # No filename stamp and no cover date in the fixture text: the injected
+    # clock (Kyiv 09:00 Nov 7) is the fallback, and the "November 1, 2023"
+    # historical reference in the fixture must be ignored.
+    session = _FakeSession([_FakeResponse(content=b"%PDF-1.7 fake")])
+    gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
+    clocked = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
+    assert clocked[0].obs_date == date(2026, 11, 7)
+    assert all(not Path(name).exists() for name in written)
+
+    # A landing page without a direct PDF follows the discovered PDF link.
     landing = _fixture("factset_landing.html")
-    pdf_fixture = _fixture("factset_forward_pe.txt")
     monkeypatch.setattr(factset_module, "run_pdftotext", lambda *a, **k: pdf_fixture)
-
     session = _FakeSession([
         _FakeResponse(landing, url="https://www.factset.com/earningsinsight"),
         _FakeResponse(content=b"%PDF-1.7 fake"),
     ])
     gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
-
-    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
-
+    linked = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
     assert len(session.calls) == 2
     assert session.calls[1]["url"].endswith("EarningsInsight_110626A.pdf")
-    assert observations[0].value == 17.7
-    assert observations[0].obs_date == date(2026, 11, 6)  # filename MMDDYY stamp
+    assert linked[0].value == 17.7
+    assert linked[0].obs_date == date(2026, 11, 6)  # filename MMDDYY stamp
 
 
 def test_factset_gateway_raises_when_pdftotext_missing(
@@ -446,31 +468,6 @@ def test_factset_gateway_fails_without_pdf_link() -> None:
     gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
     with pytest.raises(CollectorError, match="PDF"):
         gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
-
-
-def test_factset_gateway_temp_files_are_deleted(monkeypatch: pytest.MonkeyPatch) -> None:
-    written: list[str] = []
-
-    real_tmp = factset_module.tempfile.NamedTemporaryFile
-
-    def recording_tmp(*args: Any, **kwargs: Any) -> Any:
-        handle = real_tmp(*args, **kwargs)
-        written.append(handle.name)
-        return handle
-
-    pdf_fixture = _fixture("factset_forward_pe.txt")
-    monkeypatch.setattr(factset_module.tempfile, "NamedTemporaryFile", recording_tmp)
-    monkeypatch.setattr(factset_module, "run_pdftotext", lambda *_a, **_k: pdf_fixture)
-    session = _FakeSession([_FakeResponse(content=b"%PDF-1.7 fake")])
-    gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
-    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
-
-    assert written, "gateway must write exactly one temp pdf"
-    assert all(not Path(name).exists() for name in written)
-    # No filename stamp and no cover date in the fixture text: the injected
-    # clock (Kyiv 09:00 Nov 7) is the fallback, and the "November 1, 2023"
-    # historical reference in the fixture must be ignored.
-    assert observations[0].obs_date == date(2026, 11, 7)
 
 
 def test_factset_gateway_takes_cover_date_from_pdf_text(
@@ -528,8 +525,7 @@ def test_damodaran_gateway_takes_latest_implied_erp_row() -> None:
     assert observations[0].source == "damodaran"
     assert observations[0].obs_date == date(2026, 11, 7)
 
-
-def test_damodaran_gateway_skips_blank_erp_rows() -> None:
+    # Blank ERP cells are skipped; the latest non-blank row wins.
     payload = "\n".join(
         [
             "<tr><td><strong>Year</strong></td><td>Implied ERP (FCFE)</td></tr>",

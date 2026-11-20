@@ -59,7 +59,7 @@ COMPUTED_BANDED_KEYS = {
     "ecy", "vix_vix3m", "margin_yoy", "claims_yoy", "netliq_yoy", "sofr_iorb",
     "hy_change_6m", "pct_200dma", "drawdown_2y", "weekly_rsi", "buffett_z1",
 }
-INVERTED_KEYS = {"vix", "netliq_yoy", "erp", "curve_3m"}
+INVERTED_KEYS = {"vix", "vix_vix3m", "netliq_yoy", "erp", "curve_3m"}
 
 EXPECTED_MODULE_BY_KEY = {
     "hy_oas": "credit",
@@ -87,23 +87,56 @@ EXPECTED_MODULE_BY_KEY = {
 }
 
 
-def test_every_spec_has_valid_source_freq_staleness_module() -> None:
+def test_registry_structural_invariants() -> None:
     assert len(SERIES_SPECS) > 20
+
+    # Keys and invert flags.
+    keys = list(SERIES_SPECS.keys())
+    assert len(keys) == len(set(keys))
+    assert len(keys) == len({spec.key for spec in SERIES_SPECS.values()})
+
     for key, spec in SERIES_SPECS.items():
         assert spec.source in KNOWN_SOURCES, key
         assert spec.freq in KNOWN_FREQS, key
         assert spec.staleness_days > 0, key
         assert spec.module_key in MODULE_KEYS or spec.module_key is None, key
         assert spec.title_uk.strip(), key
-
-
-def test_band_refs_are_subset_of_known_vocabulary() -> None:
-    for key, spec in SERIES_SPECS.items():
         if spec.band_ref is not None:
             assert spec.band_ref in KNOWN_BAND_REFS, key
+        assert spec.invert == (key in INVERTED_KEYS), key
+        if spec.source == "fred":
+            assert spec.params.get("series_id"), key
+        elif spec.source == "yahoo":
+            assert spec.params.get("symbol", "").startswith("^"), key
+        elif spec.source in {"finra", "cnn_fg", "factset", "damodaran"}:
+            assert spec.params.get("url", "").startswith("https://"), key
+        elif spec.source == "multpl":
+            assert spec.params.get("current_url", "").startswith("https://"), key
+            assert spec.params.get("history_url", "").startswith("https://"), key
+
+    # compute_dashboard consumes margin_yoy and netliq_tbn; the shipped
+    # registry must keep their specs (2026-11-07 review: the missing entries
+    # silently disabled one sentiment and one macro member).
+    assert "margin_yoy" in SERIES_SPECS
+    assert "netliq_tbn" in SERIES_SPECS
+    # The series is SPX distance from its 200DMA, not market breadth.
+    assert SERIES_SPECS["pct_200dma"].title_uk == "S&P 500: відхилення від 200DMA"
+
+    # Sentiment inputs rank inside the design's 1-year window (report 4.2);
+    # monthly margin YoY needs 3 years to clear the 30-value floor, and the
+    # quarter-start-dated Z.1 anchor needs a budget covering its release cycle.
+    assert SERIES_SPECS["vix"].percentile_window_days == 365
+    assert SERIES_SPECS["fg"].percentile_window_days == 365
+    assert SERIES_SPECS["vix_vix3m"].percentile_window_days == 365
+    assert SERIES_SPECS["margin_yoy"].percentile_window_days == 1095
+    assert SERIES_SPECS["buffett_z1"].staleness_days == 260
+
+    with pytest.raises(TypeError):
+        SERIES_SPECS["new_key"] = SERIES_SPECS["spx"]  # type: ignore[index]
 
 
 def test_weighted_modules_match_approved_weights() -> None:
+    totals: dict[str, float] = {}
     for key, spec in SERIES_SPECS.items():
         expected = EXPECTED_WEIGHTS_BY_KEY.get(key)
         if spec.weight is None:
@@ -112,41 +145,27 @@ def test_weighted_modules_match_approved_weights() -> None:
         assert expected is not None, f"unexpected weighted key: {key}"
         assert spec.weight == pytest.approx(expected, abs=1e-9), key
         assert spec.module_key == EXPECTED_MODULE_BY_KEY.get(key), key
-
-
-def test_module_weight_totals_are_positive_and_documented() -> None:
-    totals: dict[str, float] = {}
-    for spec in SERIES_SPECS.values():
-        if spec.weight is None:
-            continue
-        assert spec.module_key is not None
         totals[spec.module_key] = totals.get(spec.module_key, 0.0) + spec.weight
+
     assert set(totals) == set(EXPECTED_MODULE_WEIGHT_TOTALS)
-    for module_key, expected in EXPECTED_MODULE_WEIGHT_TOTALS.items():
-        assert totals[module_key] == pytest.approx(expected, abs=1e-9), module_key
+    for module_key, expected_total in EXPECTED_MODULE_WEIGHT_TOTALS.items():
+        assert totals[module_key] == pytest.approx(expected_total, abs=1e-9), module_key
 
-
-def test_display_only_and_input_entries_have_no_weight_or_bands() -> None:
+    # Display-only gauges keep a band and stay in a module; input entries are
+    # invisible to the dashboard and carry neither weight nor bands.
     for key in DISPLAY_ONLY_KEYS:
         spec = SERIES_SPECS[key]
         assert spec.weight is None, key
-        assert spec.module_key is not None, key  # dashboard still shows them
+        assert spec.module_key is not None, key
+    assert SERIES_SPECS["ecy"].band_ref == "ecy"
+    assert SERIES_SPECS["fed_funds"].band_ref == "fed_funds"
     for key in INPUT_ONLY_KEYS:
         spec = SERIES_SPECS[key]
         assert spec.weight is None, key
         assert spec.module_key is None, key
         assert spec.band_ref is None, key
-    # Display-only gauges still expose a band for the dashboard.
-    assert SERIES_SPECS["ecy"].band_ref == "ecy"
-    assert SERIES_SPECS["fed_funds"].band_ref == "fed_funds"
 
-
-def test_computed_specs_reference_input_keys() -> None:
-    for key in COMPUTED_BANDED_KEYS:
-        spec = SERIES_SPECS[key]
-        assert spec.source == "computed"
-        assert spec.is_computed
-        assert spec.params, f"computed spec {key} must reference its inputs"
+    # Computed specs declare their input wiring (consume-key parity).
     expected_params = {
         "ecy": {"cape": "cape", "real_10y": "real_10y"},
         "vix_vix3m": {"vix": "vix", "vix3m": "vix3m"},
@@ -161,44 +180,10 @@ def test_computed_specs_reference_input_keys() -> None:
         "drawdown_2y": {"market": "spx"},
         "weekly_rsi": {"market": "spx"},
     }
-    for key, expected in expected_params.items():
-        assert dict(SERIES_SPECS[key].params) == expected, key
-
-
-def test_invert_flags_and_registry_keys_unique() -> None:
-    keys = list(SERIES_SPECS.keys())
-    assert len(keys) == len(set(keys))
-    assert len(keys) == len({spec.key for spec in SERIES_SPECS.values()})
-    for key, spec in SERIES_SPECS.items():
-        assert spec.invert == (key in INVERTED_KEYS), key
-
-
-def test_gateway_knobs_are_present_per_source() -> None:
-    for key, spec in SERIES_SPECS.items():
-        if spec.source == "fred":
-            assert spec.params.get("series_id"), key
-        elif spec.source == "yahoo":
-            assert spec.params.get("symbol", "").startswith("^"), key
-        elif spec.source in {"finra", "cnn_fg", "factset", "damodaran"}:
-            assert spec.params.get("url", "").startswith("https://"), key
-        elif spec.source == "multpl":
-            assert spec.params.get("current_url", "").startswith("https://"), key
-            assert spec.params.get("history_url", "").startswith("https://"), key
-
-
-def test_mapping_is_immutable_mapping_proxy() -> None:
-    with pytest.raises(TypeError):
-        SERIES_SPECS["new_key"] = SERIES_SPECS["spx"]  # type: ignore[index]
-
-
-def test_registry_pins_compute_consume_keys() -> None:
-    """compute_dashboard consumes margin_yoy and netliq_tbn; the shipped
-    registry must keep their specs (2026-11-07 review: the missing entries
-    silently disabled one sentiment and one macro member)."""
-    assert "margin_yoy" in SERIES_SPECS
-    assert "netliq_tbn" in SERIES_SPECS
-
-
-def test_pct_200dma_title_matches_distance_metric() -> None:
-    # The series is SPX distance from its 200DMA, not market breadth.
-    assert SERIES_SPECS["pct_200dma"].title_uk == "S&P 500: відхилення від 200DMA"
+    for key in COMPUTED_BANDED_KEYS:
+        spec = SERIES_SPECS[key]
+        assert spec.source == "computed", key
+        assert spec.is_computed, key
+        assert spec.params, f"computed spec {key} must reference its inputs"
+    for key, expected_params_value in expected_params.items():
+        assert dict(SERIES_SPECS[key].params) == expected_params_value, key

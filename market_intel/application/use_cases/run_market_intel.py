@@ -1,15 +1,13 @@
 """Use case: collect vintages, compute the dashboard, persist and publish it.
 
-Signature contract (per the orchestrator's approved plan):
+Contract:
 
     run_market_intel(config, runtime, *, dry_run, no_publish, reset_sheet,
                      skip_sources: Sequence[str] = ()) -> RunResult
 
-The sibling use cases `collect_vintages` and `compute_dashboard` are owned by
-the parallel data/compute agents and are imported from the `use_cases`
-package. While their modules are not yet present in a branch state, module
-attributes stay `None` and tests monkeypatch them; integration wires the real
-imports without touching this file.
+Collection and compute run unconditionally; gauge persistence and publishing
+are skipped when no external source succeeded, so a fully degraded run never
+records stale numbers as today's result.
 """
 from __future__ import annotations
 
@@ -21,25 +19,27 @@ from signals.domain.timing import now_kyiv
 
 from market_intel.domain.exceptions import MarketIntelError
 from market_intel.domain.models import (
+    SKIP_COMPUTED,
+    SKIP_MANUAL,
+    SKIP_NO_ADAPTER,
+    CollectionResult,
     GaugeHistoryPoint,
     RunResult,
 )
 
 try:
-    # Agent A (data layer): market_intel/application/use_cases/collect_vintages.py
-    # -> collect_vintages(store, fetchers, series_specs, *, skip_sources, now_utc)
+    # Preferred module path; the fallback keeps partial checkouts importable.
     from market_intel.application.use_cases.collect_vintages import collect_vintages
-except ModuleNotFoundError:  # pragma: no cover - until integration lands
+except ModuleNotFoundError:  # pragma: no cover - partial checkout only
     try:
         from market_intel.application.use_cases import collect_vintages
     except ImportError:
         collect_vintages = None
 
 try:
-    # Agent B (compute layer): market_intel/application/use_cases/compute_dashboard.py
-    # -> compute_dashboard(store, series_specs, *, as_of, now_kyiv_datetime)
+    # Preferred module path; the fallback keeps partial checkouts importable.
     from market_intel.application.use_cases.compute_dashboard import compute_dashboard
-except ModuleNotFoundError:  # pragma: no cover - until integration lands
+except ModuleNotFoundError:  # pragma: no cover - partial checkout only
     try:
         from market_intel.application.use_cases import compute_dashboard
     except ImportError:
@@ -50,6 +50,28 @@ from market_intel.registries import SERIES_SPECS
 if TYPE_CHECKING:
     from market_intel.composition import MarketIntelRuntime
     from market_intel.config import MarketIntelConfig
+
+# Skip codes that are benign: a manual skip, a computed series deferred to the
+# compute stage, or a source with no adapter - none is an upstream fetch
+# failure, so none means "the external world is down".
+_HANDLED_SKIP_CODES: frozenset[str] = frozenset(
+    {SKIP_MANUAL, SKIP_COMPUTED, SKIP_NO_ADAPTER}
+)
+
+
+def _all_external_sources_failed(collected: CollectionResult) -> bool:
+    """True when nothing was fetched and skips were not all benign.
+
+    A run in this state has no fresh data: publishing it would overwrite the
+    sheet with numbers computed from what the store happened to hold, so the
+    use case stops before any persistence or publish side effect.
+    """
+    if collected.fetched:
+        return False
+    unhandled = [
+        skip for skip in collected.skipped if skip.code not in _HANDLED_SKIP_CODES
+    ]
+    return bool(unhandled) or bool(collected.errors)
 
 
 def run_market_intel(
@@ -87,6 +109,17 @@ def run_market_intel(
         as_of=as_of,
         now_kyiv_datetime=kyiv_now,
     )
+
+    if _all_external_sources_failed(collected):
+        # No fresh input reached the store. Compute still ran (the CLI prints
+        # the dashboard), but persisting a gauge point or publishing now would
+        # record stale or empty data as today's result.
+        return RunResult(
+            collected=collected,
+            dashboard=dashboard,
+            publish=None,
+            all_external_sources_failed=True,
+        )
 
     for module in dashboard.modules:
         runtime.store.upsert_gauge_history(

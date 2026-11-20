@@ -292,8 +292,9 @@ def evaluate_forward_rows(
 
 
 def _value(series: Mapping[str, SeriesSnapshot], key: str) -> float | None:
+    """Value accessor for predicates; a stale snapshot never activates a row."""
     snapshot = series.get(key)
-    if snapshot is None:
+    if snapshot is None or snapshot.is_stale:
         return None
     return snapshot.value
 

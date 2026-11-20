@@ -1,8 +1,4 @@
-"""Frozen domain models for the market intelligence pipeline.
-
-Contract (shared by all agents - do not change field names without
-updating the orchestrator's approved plan).
-"""
+"""Frozen domain models for the market intelligence pipeline."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -218,3 +214,7 @@ class RunResult:
     collected: CollectionResult
     dashboard: DashboardSnapshot
     publish: PublishResult | None
+    # True when collection returned no data because every external source
+    # failed. The use case then skips gauge persistence and publishing; the
+    # CLI maps this terminal state to exit code 2.
+    all_external_sources_failed: bool = False

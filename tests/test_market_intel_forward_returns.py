@@ -35,8 +35,7 @@ def test_forward_rows_transcription_is_complete_and_verbatim() -> None:
     assert keys[0] == "cape_gt_25"
     assert keys[-1] == "ndx_any"
 
-
-def test_verbatim_cells_from_the_research_report() -> None:
+    # Spot-check cells verbatim against the research report (sec. 5.1).
     cape = FORWARD_ROWS[0]
     assert cape.result_uk == "~0,5%/р. середнє"
     assert cape.uncertainty_uk == "розкид -6,1..+8,3%/р."

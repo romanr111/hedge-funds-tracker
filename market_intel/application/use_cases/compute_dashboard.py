@@ -57,6 +57,7 @@ _MARGIN_MOM_TOL_DAYS = 45
 _MARGIN_MAX_WINDOW_DAYS = 183
 _FG_MIN_WINDOW_DAYS = 28
 _FG_MIN_OBS_COUNT = 20
+_CLAIMS_MEAN_PRINTS = 4  # four-week average as a print count, not a day window
 _BREADTH_DEFERRED_UK = "Ширина ринку (% акцій над 200DMA) відкладена - у MVP відсутня"
 _THIN_WINDOW_WARNING = "перцентильне вікно замале (<30 значень у вікні)"
 _UNIT_SANITY_RANGE = (50.0, 400.0)
@@ -255,14 +256,27 @@ def _derive_ratio_like(
 
 
 def _derive_claims_yoy(icsa: list[tuple[date, float]] | None, as_of: date) -> tuple[list[tuple[date, float]], tuple[date, float]] | None:
-    """YoY of the 28-day trailing mean of initial claims."""
+    """YoY of the trailing four-print mean of initial claims.
+
+    The mean spans a fixed print count (the design's four-week average), not a
+    day window: a 28-day window contains five weekly prints at the current
+    anchor but four one year earlier (365d = 52w + 1d), so YoY would compare
+    unequal means.
+    """
     if not icsa:
         return None
     series = calc.SortedSeries(icsa)
 
+    def _mean_at(t: date) -> float | None:
+        hi = bisect_right(series.dates, t)
+        if hi < _CLAIMS_MEAN_PRINTS:
+            return None
+        window = series.points[hi - _CLAIMS_MEAN_PRINTS:hi]
+        return sum(v for _, v in window) / _CLAIMS_MEAN_PRINTS
+
     def _yoy_at(t: date) -> tuple[date, float] | None:
-        m_now = series.rolling_mean(28, t)
-        m_year = series.rolling_mean(28, t - timedelta(days=365))
+        m_now = _mean_at(t)
+        m_year = _mean_at(t - timedelta(days=365))
         if m_now is None or m_year is None or m_year == 0.0:
             return None
         return (t, (m_now / m_year - 1.0) * 100.0)
@@ -304,7 +318,7 @@ def _derive_netliq(
     tga: list[tuple[date, float]] | None,
     as_of: date,
 ) -> tuple[list[tuple[date, float]], tuple[date, float]] | None:
-    """netliq($B) = walcl($M)/1000 - rrp($B) - tga($B) at WALCL dates."""
+    """netliq($B) = walcl($M)/1000 - rrp($B) - tga($M)/1000 at WALCL dates."""
     if not walcl or not rrp or not tga:
         return None
     points: list[tuple[date, float]] = []
@@ -313,7 +327,7 @@ def _derive_netliq(
         t = calc.nearest_point(tga, d, _NETLIQ_PAIR_TOL_DAYS)
         if r is None or t is None:
             continue
-        points.append((d, w / 1000.0 - r[1] - t[1]))
+        points.append((d, w / 1000.0 - r[1] - t[1] / 1000.0))
     current = calc.latest_at_or_before(points, as_of)
     if not points or current is None:
         return None
@@ -443,8 +457,20 @@ def _make_snapshot(
     )
 
 
-def _make_diagnostic(key: str, value: float | None, obs_date: date | None) -> SeriesSnapshot:
+def _make_diagnostic(
+    key: str,
+    value: float | None,
+    obs_date: date | None,
+    *,
+    source: SeriesSnapshot | None = None,
+) -> SeriesSnapshot:
+    """Diagnostic snapshot; staleness is inherited from its source series.
+
+    Diagnostics feed forward-row predicates, so a stale source must deactivate
+    them exactly as it deactivates the gauge member.
+    """
     title_uk, meaning_uk, unit_uk = _DIAGNOSTIC_META[key]
+    stale = source is not None and source.is_stale
     return SeriesSnapshot(
         key=key,
         title_uk=title_uk,
@@ -453,8 +479,8 @@ def _make_diagnostic(key: str, value: float | None, obs_date: date | None) -> Se
         obs_date=obs_date,
         percentile=None,
         band=None,
-        is_stale=False,
-        stale_reason_uk=None,
+        is_stale=stale,
+        stale_reason_uk=source.stale_reason_uk if stale else None,
         meaning_uk=meaning_uk,
         source_uk=_COMPUTED_FALLBACK_SOURCE,
         unit_uk=unit_uk,
@@ -476,7 +502,7 @@ def _curated_facts(module_key: str, snapshots: Mapping[str, SeriesSnapshot]) -> 
     facts: list[str] = []
     for key in _MODULE_FACTS.get(module_key, ()):
         snap = snapshots.get(key)
-        if snap is None or snap.value is None or snap.obs_date is None:
+        if snap is None or snap.value is None or snap.obs_date is None or snap.is_stale:
             continue
         label = _FACT_LABELS_UK.get(key, snap.title_uk)
         facts.append(f"{label} {format_value_uk(snap.value, '')} ({snap.obs_date.isoformat()})")
@@ -564,13 +590,19 @@ def _chip_or_unavailable(by_module: Mapping[str, ModuleGauge], module_key: str) 
 
 
 def _sval(snapshots: Mapping[str, SeriesSnapshot], key: str) -> float | None:
+    """Stale-aware value accessor: stale data must not drive triggers or facts."""
     snap = snapshots.get(key)
-    return snap.value if snap is not None else None
+    if snap is None or snap.is_stale:
+        return None
+    return snap.value
 
 
 def _spct(snapshots: Mapping[str, SeriesSnapshot], key: str) -> float | None:
+    """Stale-aware percentile accessor (see ``_sval``)."""
     snap = snapshots.get(key)
-    return snap.percentile if snap is not None else None
+    if snap is None or snap.is_stale:
+        return None
+    return snap.percentile
 
 
 # ---------------------------------------------------------------------------
@@ -701,23 +733,41 @@ def compute_dashboard(
             as_of=as_of,
         )
         if mom is not None:
-            snapshots.setdefault("margin_mom_change", _make_diagnostic("margin_mom_change", mom[1], mom[0]))
+            snapshots.setdefault(
+                "margin_mom_change",
+                _make_diagnostic("margin_mom_change", mom[1], mom[0], source=snapshots.get("margin_debt")),
+            )
         if yoy_max is not None:
-            snapshots.setdefault("margin_yoy_max_6m", _make_diagnostic("margin_yoy_max_6m", yoy_max, current[0]))
+            snapshots.setdefault(
+                "margin_yoy_max_6m",
+                _make_diagnostic("margin_yoy_max_6m", yoy_max, current[0], source=snapshots.get("margin_debt")),
+            )
     else:
         warnings.append("margin_yoy: немає історії маржинальної заборгованості")
 
     # --- curve + fg diagnostics --------------------------------------------------
     curve_slope, curve_min = _derive_curve_diagnostics(_points("curve_3m"), as_of)
     if curve_slope is not None:
-        snapshots.setdefault("curve_slope_90d", _make_diagnostic("curve_slope_90d", curve_slope, _latest_date(_points("curve_3m"), as_of)))
+        snapshots.setdefault(
+            "curve_slope_90d",
+            _make_diagnostic(
+                "curve_slope_90d", curve_slope, _latest_date(_points("curve_3m"), as_of),
+                source=snapshots.get("curve_3m"),
+            ),
+        )
     if curve_min is not None:
-        snapshots.setdefault("curve_min_540d", _make_diagnostic("curve_min_540d", curve_min, _latest_date(_points("curve_3m"), as_of)))
+        snapshots.setdefault(
+            "curve_min_540d",
+            _make_diagnostic(
+                "curve_min_540d", curve_min, _latest_date(_points("curve_3m"), as_of),
+                source=snapshots.get("curve_3m"),
+            ),
+        )
     fg_min, fg_min_obs = _derive_fg_min_28d_with_obs(_points("fg"), as_of)
     if fg_min is None and _points("fg"):
         warnings.append("fg_min_28d: коротка історія F&G - 4-тижневу умову ейфорії не перевірено")
     if fg_min is not None:
-        snapshots.setdefault("fg_min_28d", _make_diagnostic("fg_min_28d", fg_min, fg_min_obs))
+        snapshots.setdefault("fg_min_28d", _make_diagnostic("fg_min_28d", fg_min, fg_min_obs, source=snapshots.get("fg")))
 
     # --- module gauges -----------------------------------------------------------
     modules: list[ModuleGauge] = []

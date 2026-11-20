@@ -13,10 +13,6 @@ from market_intel.composition import build_runtime
 from market_intel.config import load_config
 from market_intel.domain.exceptions import MarketIntelError, MarketIntelPublishError
 from market_intel.domain.models import (
-    SKIP_COMPUTED,
-    SKIP_MANUAL,
-    SKIP_NO_ADAPTER,
-    CollectionResult,
     DashboardSnapshot,
     RunResult,
 )
@@ -34,16 +30,6 @@ _KNOWN_SOURCES: Final[frozenset[str]] = frozenset(
 
 DEGRADED_PUBLISH_STATUSES: Final[frozenset[str]] = frozenset(
     {STATUS_SKIPPED_NO_GOG, STATUS_SKIPPED_UNCHANGED}
-)
-_HANDLED_SKIP_CODES: Final[frozenset[str]] = frozenset(
-    {
-        SKIP_MANUAL,
-        SKIP_COMPUTED,
-        # collect_vintages benign codes: manual skip, computed series deferred
-        # to the compute stage, no adapter for a source - none is an upstream
-        # fetch failure, so none triggers the all-sources-failed exit.
-        SKIP_NO_ADAPTER,
-    }
 )
 
 
@@ -101,7 +87,7 @@ def _main(logger: logging.Logger) -> int:
             skip_sources=tuple(args.skip_source),
         )
         _print_result(result, show_details=args.show)
-        if _all_external_sources_failed(result.collected):
+        if result.all_external_sources_failed:
             print("Усі зовнішні джерела недоступні; дані не оновлювалися.")
             return 2
         return 0
@@ -256,11 +242,3 @@ def _format_table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     lines = [render(header), " | ".join("-" * width for width in widths)]
     lines.extend(render(row) for row in rows)
     return "\n".join(lines)
-
-
-def _all_external_sources_failed(collected: CollectionResult) -> bool:
-    """Exit-ladder rule: nothing fetched and skips were not benign."""
-    if collected.fetched:
-        return False
-    unhandled = [skip for skip in collected.skipped if skip.code not in _HANDLED_SKIP_CODES]
-    return bool(unhandled) or bool(collected.errors)

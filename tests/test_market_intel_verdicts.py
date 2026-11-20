@@ -23,17 +23,14 @@ _STATE_COUNTS = {
 
 def test_every_module_state_has_distinct_verdict_with_disclaimer() -> None:
     for module in MODULE_KEYS:
+        seen: set[str] = set()
         for index in range(1, _STATE_COUNTS[module] + 1):
             verdict = module_verdict_uk(module, f"composite_{module}{index}", None, 3)
             assert verdict, (module, index)
             assert verdict.endswith(_TAIL)
-
-
-def test_verdicts_differ_between_states_of_one_module() -> None:
-    seen = set()
-    for index in range(1, 5):
-        seen.add(module_verdict_uk("valuation", f"composite_valuation{index}", None, 4))
-    assert len(seen) == 4
+            seen.add(verdict)
+        # Every state of a module reads differently.
+        assert len(seen) == _STATE_COUNTS[module], module
 
 
 def test_stale_state_verdict_degrades_honestly() -> None:

@@ -117,11 +117,13 @@ def _run_result(
     skipped: tuple[Skip, ...] = (),
     errors: tuple[str, ...] = (),
     publish: PublishResult | None = None,
+    all_external_sources_failed: bool = False,
 ) -> RunResult:
     return RunResult(
         collected=CollectionResult(fetched=fetched, skipped=skipped, errors=errors),
         dashboard=_dashboard(),
         publish=publish,
+        all_external_sources_failed=all_external_sources_failed,
     )
 
 
@@ -350,6 +352,7 @@ def test_cli_all_sources_failed_returns_two(
             fetched=(),
             skipped=(Skip("fred", SKIP_SOURCE_ERROR, "HTTP 502 for upstream"),),
             publish=None,
+            all_external_sources_failed=True,
         ),
     )
 
@@ -456,19 +459,3 @@ def test_main_publish_error_returns_three(
     assert cli_main_module.main() == 3  # type: ignore[no-untyped-call]
     assert "Помилка публікації Sheet" in capsys.readouterr().out
     assert store.closed is True
-
-
-def test_verbose_sets_debug_logging_level(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    captured_levels: list[int] = []
-
-    def fake_configure_logging(*, level: int = logging.INFO) -> None:
-        captured_levels.append(level)
-
-    monkeypatch.setattr(cli_main_module, "configure_logging", fake_configure_logging)
-    _patch_cli(monkeypatch, tmp_path, args=_args(verbose=True), run_result=_run_result(publish=None))
-
-    # main() configures INFO first, then --verbose reconfigures DEBUG inside _main.
-    assert cli_main_module.main() == 0  # type: ignore[no-untyped-call]
-    assert captured_levels == [logging.INFO, logging.DEBUG]

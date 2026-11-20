@@ -111,7 +111,7 @@ def _seed_store(db_path: Path, *, erp_mode: str) -> VintageStore:
     osc("ig_oas", 1.15, 0.12, 1300, step_days=1, period=197)
     osc("fed_funds", 4.25, 0.002, 1300, step_days=1, period=727)
     osc("rrpontsyd", 450.0, 0.30, 1300, step_days=1, period=127)
-    osc("wregen", 640.0, 0.15, 1300, step_days=1, period=157)
+    osc("wregen", 640000.0, 0.15, 1300, step_days=1, period=157)  # $M, like WALCL
     osc("spx", 5500.0, 0.08, 1300, step_days=1, period=909)
 
     # Weekly inputs (120 points > 365d + 35d YoY tolerance chains).

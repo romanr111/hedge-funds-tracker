@@ -31,6 +31,7 @@ from market_intel.domain.models import (
     SeriesSnapshot,
     SeriesSpec,
     Skip,
+    SKIP_COMPUTED,
     SKIP_MANUAL,
 )
 from market_intel.infrastructure.export.gog_client import GogOutcome
@@ -516,3 +517,43 @@ def test_dry_run_and_no_publish_return_publish_none(
     assert dry.publish is None
     assert skipped.publish is None
     assert publisher.calls == []
+
+
+def test_all_sources_failed_stops_before_gauge_persist_and_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_module, store = _wire_run(monkeypatch, Path("."))
+    failed = CollectionResult(
+        fetched=(),
+        skipped=(),
+        errors=("fred: HTTP 500", "yahoo: HTTP 502"),
+    )
+    monkeypatch.setattr(run_module, "collect_vintages", lambda *args, **kwargs: failed)
+    publisher = _RecordingPublisher()
+
+    result = _run(run_module, store, publisher)
+
+    assert result.all_external_sources_failed is True
+    assert result.publish is None
+    assert publisher.calls == []
+    # The prior-day history survives untouched and no today point was written.
+    assert all(point.run_date != KYIV_NOW.date() for point in store.read_gauge_history())
+
+
+def test_benign_skips_alone_do_not_count_as_all_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_module, store = _wire_run(monkeypatch, Path("."))
+    benign = CollectionResult(
+        fetched=(),
+        skipped=(Skip("cape", SKIP_COMPUTED, "обчислюється на етапі compute"),),
+        errors=(),
+    )
+    monkeypatch.setattr(run_module, "collect_vintages", lambda *args, **kwargs: benign)
+    publisher = _RecordingPublisher()
+
+    result = _run(run_module, store, publisher)
+
+    assert result.all_external_sources_failed is False
+    assert len(publisher.calls) == 1
+    assert any(point.run_date == KYIV_NOW.date() for point in store.read_gauge_history())

@@ -132,11 +132,17 @@ class GogSheetsPublisher:
         fingerprint = _content_fingerprint(spec)
 
         last_run = self._store.last_publish_run()
+        current_id = self._store.get_setting(SETTING_SPREADSHEET_ID)
         if (
             last_run is not None
             and not reset_sheet
             and last_run.fingerprint == fingerprint
             and last_run.status in _ACCEPTED_PUBLISH_STATUSES
+            # The skip is only valid for the spreadsheet the run is targeting:
+            # after a --spreadsheet-id switch or a reset the last run describes
+            # a different document, and skipping would leave the new target stale.
+            and current_id is not None
+            and last_run.spreadsheet_id == current_id
         ):
             logger.info(
                 "Skipping publish: dashboard content is unchanged",
@@ -253,7 +259,10 @@ class GogSheetsPublisher:
             # Verified: `gog sheets create <title> --parent FOLDER_ID`.
             create_args.extend(["--parent", self._folder_id])
         create_args.extend(["-j", "--results-only"])
-        outcome = self._client.run(create_args)
+        # No retries: a retried create can succeed twice and mint a duplicate
+        # spreadsheet. The stored id is the only link back to the document, so
+        # an ambiguous failure is reported, not re-attempted.
+        outcome = self._client.run(create_args, retries=0)
         if outcome.returncode != 0:
             raise MarketIntelPublishError(
                 "Не вдалося створити Spreadsheet: "
@@ -669,11 +678,73 @@ _NOT_FOUND_MARKERS: Final[tuple[str, ...]] = (
     "notfound",
 )
 
+# Failure output that can mention "404"/"not found" for reasons unrelated to
+# the document (expired credentials, a proxy error page, a dropped connection)
+# must never let the publisher mint a replacement spreadsheet.
+_NON_TERMINAL_MARKERS: Final[tuple[str, ...]] = (
+    "401",
+    "403",
+    "unauthorized",
+    "forbidden",
+    "permission",
+    "auth",
+    "credential",
+    "keyring",
+    "token",
+    "config",
+    "network",
+    "timed out",
+    "timeout",
+    "connection",
+    "certificate",
+)
+
 
 def _is_not_found_outcome(outcome: GogOutcome) -> bool:
-    """True only for a terminal gog "spreadsheet does not exist" response."""
+    """True only for a terminal gog "spreadsheet does not exist" response.
+
+    The plain-text marker scan is the last resort: failed runs often echo
+    "404" or "not found" in unrelated contexts (auth pages, proxies), so known
+    non-terminal markers are rejected first, and a structured JSON error that
+    names the missing entity decides on its own when present.
+    """
+    if outcome.returncode == 0:
+        return False
     combined = f"{outcome.stderr or ''} {outcome.stdout or ''}".lower()
+    if any(marker in combined for marker in _NON_TERMINAL_MARKERS):
+        return False
+    structured = _structured_not_found(outcome)
+    if structured is not None:
+        return structured
     return any(marker in combined for marker in _NOT_FOUND_MARKERS)
+
+
+def _structured_not_found(outcome: GogOutcome) -> bool | None:
+    """Classify a JSON error payload; None when no structured error is present."""
+    try:
+        doc = json.loads(outcome.stdout) if outcome.stdout.strip() else None
+    except (ValueError, TypeError):
+        doc = None
+    if not isinstance(doc, dict):
+        return None
+    error = doc.get("error")
+    if isinstance(error, str):
+        lowered = error.lower()
+        return any(marker in lowered for marker in _NOT_FOUND_MARKERS)
+    if not isinstance(error, dict):
+        return None
+    code = error.get("code")
+    status = error.get("status")
+    if code is not None or status is not None:
+        # Structured fields are authoritative: a message that happens to
+        # mention "404" cannot override an explicit non-404 code.
+        if str(code).strip() == "404":
+            return True
+        return isinstance(status, str) and status.strip().lower() == "not_found"
+    message = error.get("message")
+    if isinstance(message, str):
+        return any(marker in message.lower() for marker in _NOT_FOUND_MARKERS)
+    return False
 
 
 def _extract_spreadsheet_id(doc: Mapping[str, Any]) -> tuple[str | None, str]:

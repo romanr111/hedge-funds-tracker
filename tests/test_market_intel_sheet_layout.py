@@ -304,14 +304,6 @@ def test_history_tab_pivots_by_date() -> None:
     assert any(row and row[0] == "2026-11-05" and row[1] == 40.0 for row in sparse_rows)
 
 
-def test_freeze_rows_and_column_widths_set() -> None:
-    spec = build_sheet_document(_snapshot(), _history_rows())
-    for tab in spec.tabs:
-        assert tab.freeze_rows == 1
-        assert tab.column_widths
-        assert all(width > 0 for width in tab.column_widths)
-
-
 def test_chart_spec_only_with_enough_history() -> None:
     spec = build_sheet_document(_snapshot(), _history_rows())
     assert spec.chart is not None
@@ -332,6 +324,10 @@ def test_chart_spec_only_with_enough_history() -> None:
 def test_all_cell_ranges_quote_tab_names() -> None:
     spec = build_sheet_document(_snapshot(), _history_rows())
     for tab in spec.tabs:
+        # Every tab keeps its header visible and carries positive column widths.
+        assert tab.freeze_rows == 1
+        assert tab.column_widths
+        assert all(width > 0 for width in tab.column_widths)
         for op in tab.cell_ops:
             assert op.range.startswith(f"'{tab.name}'!")
         for op in tab.format_ops:

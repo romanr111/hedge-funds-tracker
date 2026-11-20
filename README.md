@@ -366,8 +366,8 @@ Final signal:
 A second CLI in this repo (not part of the `signals` pipeline): a 5-module US
 market intelligence snapshot for a non-professional reader - valuation,
 sentiment, technique, macro/liquidity, credit - published as a native Google
-Spreadsheet via the `gog` CLI. Design and evidence base:
-`reports/2026-11-06-market-intelligence-research-uk.md`.
+Spreadsheet via the `gog` CLI. Architecture, invariants, and change recipes:
+`market_intel/AGENTS.md` (mirrored as `market_intel/CLAUDE.md`).
 
 ```bash
 # Full run: collect fresh data, compute the dashboard, publish to Drive
@@ -389,19 +389,33 @@ python -m market_intel --reset-sheet
 python -m market_intel --skip-source cnn_fg
 ```
 
+Focused tests (offline; no network or `gog` binary required):
+
+```bash
+python -m pytest tests/test_market_intel_*.py -q
+```
+
+Full repository suite: `python -m pytest -q`.
+
 Environment keys (see `config/.env.example`): `MARKET_INTEL_DB_PATH` (default
-`data/local/market_intel.sqlite3`), `SHEETS_SPREADSHEET_ID` (pin an existing
-sheet; otherwise one is created once and its id is persisted in the store),
-`SHEETS_FOLDER_ID` (optional Drive parent folder), and politeness intervals
-`MARKET_INTEL_FRED_INTERVAL` / `MARKET_INTEL_YAHOO_INTERVAL` /
-`MARKET_INTEL_HTTP_INTERVAL`. Publishing requires an authenticated `gog`
-binary; when it is missing the run still succeeds and reports
-`skipped_no_gog`.
+`data/local/market_intel.sqlite3`), `SHEETS_SPREADSHEET_ID` (seeds the sheet id
+only when the store has no persisted id; use `--spreadsheet-id` to override an
+existing one), `SHEETS_FOLDER_ID` (optional Drive parent folder; falls back to
+`EXPORT_JSON_GDRIVE_FOLDER_ID` when empty), and politeness intervals
+`MARKET_INTEL_FRED_INTERVAL` (0.2-10.0, default 1.0) /
+`MARKET_INTEL_YAHOO_INTERVAL` (0.2-60.0, default 1.5) /
+`MARKET_INTEL_HTTP_INTERVAL` (0.2-60.0, default 1.0); out-of-range values fail
+at startup. Publishing requires `gog` on PATH with non-interactive auth
+(`GOG_ACCOUNT` optionally selects the account; `GOG_KEYRING_PASSWORD`,
+`GOG_HOME`, and `GOG_ACCESS_TOKEN` are passed through). When `gog` is missing
+the run still succeeds and reports `skipped_no_gog`.
 
 Known MVP limitations: Yahoo Finance blocks this machine's egress (HTTP 429)
 and FINRA sits behind a Cloudflare challenge (HTTP 403), so those feeds miss
-and the technique module shows "Недоступно" until the block lifts; a dead
-source never fails the run. Damodaran implied ERP comes from the annual
-histimpl table. The system does not predict market direction: it maps current
-conditions to historical forward-return distributions with explicit
-uncertainty, and provides no financial advice.
+and the technique module shows "Недоступно" until the block lifts; status was
+probed 2026-11-07 and should be re-verified. A single dead source does not fail
+the run, but if no external source succeeds the run exits 2 and writes
+nothing. Damodaran implied ERP comes from the annual histimpl table. The
+system does not predict market direction: it maps current conditions to
+historical forward-return distributions with explicit uncertainty, and
+provides no financial advice.

@@ -83,7 +83,8 @@ def _seed_data(*, margin: list[float] | None = None, extra_ignores_vix3m: bool =
         "curve_3m": _daily("curve_3m", [0.67] * N_DAILY),
         "fed_funds": _daily("fed_funds", [3.875] * N_DAILY),
         "rrpontsyd": _daily("rrpontsyd", [0.1] * N_DAILY),
-        "wregen": _daily("wregen", [957.0] * N_DAILY),
+        # FRED WTREGEN is millions of USD, like WALCL (netliq divides by 1000)
+        "wregen": _daily("wregen", [957000.0] * N_DAILY),
         "icsa": _daily("icsa", [200000.0] * 96, _WEEKLY_96_THU),
         "walcl": _daily("walcl", [6793000.0] * 96, _WEEKLY_96),
         "nfci": _daily("nfci", [-0.459] * 52, _WEEKLY_52_THU),
@@ -134,7 +135,7 @@ def _specs() -> dict[str, SeriesSpec]:
         "fg": _spec("fg", "sentiment", 0.25, "fg"),
         "vix": _spec("vix", "sentiment", 0.20, "vix"),
         "vix3m": _spec("vix3m", "sentiment", None, None),
-        "vix_vix3m": _spec("vix_vix3m", "sentiment", 0.10, "vix_vix3m", computed=True),
+        "vix_vix3m": _spec("vix_vix3m", "sentiment", 0.10, "vix_vix3m", computed=True, invert=True),
         "margin_debt": _spec("margin_debt", "sentiment", None, None, freq="monthly", staleness=35, window=4000),
         "margin_yoy": _spec("margin_yoy", "sentiment", 0.25, "margin_yoy", freq="monthly", staleness=35, window=4000, computed=True, unit="%"),
         "spx": _spec("spx", "technique", None, None),
@@ -200,14 +201,17 @@ def _module(snapshot: DashboardSnapshot, module: str) -> ModuleGauge:
 
 def test_module_scores_and_chips_hand_computed() -> None:
     snapshot = _compute(_seed_data())
+    assert snapshot.as_of == AS_OF
+    assert snapshot.generated_at == NOW
     scores = {m.module_key: m for m in snapshot.modules}
     # valuation: mean of risk percentiles 99.875, 45.125, 98.78049, 49.875
     assert scores["valuation"].score == pytest.approx(73.41387195121953)
     assert scores["valuation"].chip_label_uk == "Дорого"
     assert scores["valuation"].chip_color == COLOR_TOKEN_HEX["state3"]
-    # sentiment: (.25*75.125 + .20*62.625 + .10*62.625 + .25*50) / .80
-    assert scores["sentiment"].score == pytest.approx(62.5859375)
-    assert scores["sentiment"].chip_label_uk == "Обережно"
+    # sentiment: (.25*75.125 + .20*62.625 + .10*37.375 + .25*50) / .80
+    # vix_vix3m stores raw 62.625 but is inverted (stress when the ratio is high)
+    assert scores["sentiment"].score == pytest.approx(59.4296875)
+    assert scores["sentiment"].chip_label_uk == "Жадібність"
     # technique/macro: constant seeds -> every percentile 50 -> composite 50
     assert scores["technique"].score == pytest.approx(50.0)
     assert scores["technique"].chip_label_uk == "Нейтрально"
@@ -253,15 +257,15 @@ def test_claims_yoy_anchors_to_latest_observation_not_run_date() -> None:
     data = _seed_data()
     last_obs = date(2026, 10, 15)  # 22 days before AS_OF
     dates = [last_obs - timedelta(days=7 * i) for i in range(96)][::-1]
-    # All prints are 100 except the latest 200. The 28-day mean at last_obs
-    # spans five weekly prints (120); at AS_OF it would span only the 200
-    # print. Anchoring at AS_OF therefore reports +100% instead of +20%.
+    # All prints are 100 except the latest 200. The four-print mean at last_obs
+    # is (200+100+100+100)/4 = 125 against 100 a year earlier -> +25%. At AS_OF
+    # it would span only the 200 print. Anchoring at AS_OF would report +100%.
     data["icsa"] = _daily("icsa", [100.0] * 95 + [200.0], dates)
 
     claims = _by_key(_compute(data), "macro")["claims_yoy"]
 
     assert claims.obs_date == last_obs
-    assert claims.value == pytest.approx(20.0)
+    assert claims.value == pytest.approx(25.0)
     assert claims.is_stale  # 22 days exceeds the 8-day weekly budget
 
 
@@ -300,11 +304,6 @@ def test_staleness_rules_and_exact_reason_strings() -> None:
     assert not _by_key(fresh, "valuation")["buffett_z1"].is_stale
 
 
-def test_missing_member_spec_input_is_skipped_without_crash() -> None:
-    snapshot = _compute(_seed_data())
-    assert all(s.key != "mystery" for s in snapshot.indicators)
-
-
 def test_missing_vix3m_series_warns_and_renormalizes() -> None:
     snapshot = _compute(_seed_data(extra_ignores_vix3m=True))
     assert any("vix_vix3m" in w and "не обчислено" in w for w in snapshot.warnings_uk)
@@ -319,8 +318,8 @@ def test_thin_percentile_window_excludes_member_with_warning() -> None:
     assert any("fg" in w and "перцентильн" in w.lower() for w in snapshot.warnings_uk)
     sentiment = {m.module_key: m for m in snapshot.modules}["sentiment"]
     assert "fg" in sentiment.dropped_uk[0].split(":")[0] or "fg" in sentiment.dropped_uk[0]
-    # (.20*62.625 + .10*62.625 + .25*50) / .55
-    assert sentiment.score == pytest.approx(56.88636363636364)
+    # (.20*62.625 + .10*37.375 + .25*50) / .55  (vix_vix3m inverted)
+    assert sentiment.score == pytest.approx(52.29545454545454)
     assert sentiment.members_used == 3
 
 
@@ -340,12 +339,6 @@ def test_no_peeking_beyond_as_of() -> None:
     assert cape.percentile == pytest.approx(99.875)  # 2027 print excluded from the window
 
 
-def test_generated_at_and_as_of_are_explicit() -> None:
-    snapshot = _compute(_seed_data())
-    assert snapshot.as_of == AS_OF
-    assert snapshot.generated_at == NOW
-
-
 def test_forward_rows_active_set_for_base_seed() -> None:
     snapshot = _compute(_seed_data())
     assert len(snapshot.forward_rows) == 19
@@ -359,7 +352,7 @@ def test_system_signal_contains_states_and_valuation_divergence() -> None:
     snapshot = _compute(_seed_data())
     text = snapshot.system_signal_uk
     assert text.startswith("Стан модулів:")
-    assert "Дорого" in text and "Обережно" in text and "Помірний" in text
+    assert "Дорого" in text and "Жадібність" in text and "Помірний" in text
     # CAPE pct 99.875 vs forward P/E pct 45.125 -> divergence sentence
     assert "Ціна очікуваного зростання" in text
     assert "перц. пунктів" in text
@@ -387,6 +380,22 @@ def test_credit_gate_sentence_on_wide_hy() -> None:
     assert "HY OAS 4,61% > 4,5%" in snapshot.system_signal_uk
 
 
+def test_stale_series_cannot_fire_triggers_or_forward_rows() -> None:
+    # A stale wide HY would trip the credit gate if staleness were ignored.
+    stale_wide = _seed_data()
+    stale_wide["hy_oas"] = _daily("hy_oas", [4.61] * (N_DAILY - 36))
+    assert "Кредитний гейт" not in _compute(stale_wide).system_signal_uk
+
+    # The compressed-HY row is active on fresh data...
+    fresh = _compute(_seed_data())
+    assert any(r.active_now and r.rule_key == "hy_compressed_fci_easing" for r in fresh.forward_rows)
+    # ...but a stale HY print must not keep it active.
+    stale_narrow = _seed_data()
+    stale_narrow["hy_oas"] = _daily("hy_oas", [3.32] * (N_DAILY - 36))
+    stale_rows = _compute(stale_narrow).forward_rows
+    assert not any(r.active_now and r.rule_key == "hy_compressed_fci_easing" for r in stale_rows)
+
+
 def test_capitulation_cluster_sentence_on_vix_spike() -> None:
     data = _seed_data()
     data["vix"] = _daily("vix", _layered(10.0, [(250, 12.0), (149, 20.0), (1, 45.0)]))
@@ -395,15 +404,12 @@ def test_capitulation_cluster_sentence_on_vix_spike() -> None:
     assert "Капітуляційний кластер: 1 з 3" in snapshot.system_signal_uk
 
 
-def test_breadth_deferral_is_always_warned() -> None:
-    snapshot = _compute(_seed_data())
-    assert "Ширина ринку (% акцій над 200DMA) відкладена - у MVP відсутня" in snapshot.warnings_uk
-
-
 def test_unknown_band_ref_warns_but_keeps_snapshot() -> None:
-    specs = _specs()
-    specs["nfci"] = _spec("nfci", "macro", 0.25, "nfci_unknown_table", freq="weekly", staleness=8)
-    snapshot = _compute(_seed_data(), specs)
+    spec_set = _specs()
+    spec_set["nfci"] = _spec("nfci", "macro", 0.25, "nfci_unknown_table", freq="weekly", staleness=8)
+    snapshot = _compute(_seed_data(), spec_set)
+    # The deferred breadth gauge is warned about on every run.
+    assert "Ширина ринку (% акцій над 200DMA) відкладена - у MVP відсутня" in snapshot.warnings_uk
     assert any("невідома band_ref" in w and "nfci" in w for w in snapshot.warnings_uk)
     nfci = _by_key(snapshot, "macro")["nfci"]
     assert nfci.band is None

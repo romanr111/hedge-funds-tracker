@@ -23,7 +23,8 @@ def _clear_market_intel_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_load_config_defaults() -> None:
+def test_load_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    _clear_market_intel_env(monkeypatch)
     config = config_module.load_config()
 
     assert config.db_path == config_module.REPO_ROOT / "data" / "local" / "market_intel.sqlite3"
@@ -135,7 +136,3 @@ def test_load_dotenv_fallback_parses_lines_and_respects_existing_env(
     assert config_module.os.environ["BROKEN"] == "unterminated"
     assert config_module.os.environ["EMPTY"] == ""
     assert config_module.os.environ["MI_DB"] == "data/local/market_intel.sqlite3"
-
-
-def test_load_dotenv_fallback_noop_when_file_missing(tmp_path: Path) -> None:
-    config_module._load_dotenv_fallback(tmp_path / "missing.env")

@@ -368,6 +368,8 @@ def test_first_publish_creates_spreadsheet_and_tabs_in_order() -> None:
     assert _commands(client)[0] == "create"
     create_args = client.calls[0]["args"]
     assert "--parent" not in create_args  # no folder configured
+    # Create is never retried: an ambiguous retry could mint a duplicate sheet.
+    assert client.calls[0]["retries"] == 0
     # The API-default tab is cleaned up, our tabs are created in fixed order.
     add_tab_args = [call["args"] for call in client.calls if call["args"][1:2] == ["add-tab"]]
     created_tabs = [args[3] for args in add_tab_args]
@@ -403,8 +405,11 @@ def test_batch_update_runs_once_per_tab_with_raw_input_and_temp_file() -> None:
         assert "--input" in args and args[args.index("--input") + 1] == "RAW"
         assert any(arg.startswith("--data-json=@") for arg in args)
         data_arg = next(arg for arg in args if arg.startswith("--data-json=@"))
-        assert Path(data_arg.split("=", 1)[1]).exists() is False  # temp cleaned up
-        assert not data_arg.startswith("--data-json=@/Users/roman/Documents/Development/Signals")  # never inside repo
+        data_path = Path(data_arg.split("=", 1)[1][1:])
+        # Written into a throwaway directory outside the repo, and the temp
+        # directory is gone once publish returns.
+        assert "market-intel-publish-" in str(data_path.parent)
+        assert data_path.exists() is False
     # Exactly one batch per tab, each carrying that tab's quoted rows.
     for tab_name in TAB_NAMES:
         assert len(_batches_for(client, tab_name)) == 1
@@ -554,6 +559,92 @@ def test_same_content_second_publish_is_skipped_without_gog_calls() -> None:
     assert [run["status"] for run in store.publish_runs][-1] == "skipped_unchanged"
 
 
+def test_target_switch_forces_publish_even_when_content_unchanged() -> None:
+    store = FakeStore()
+    client = FakeGogClient()
+
+    first = _publish(store, client)
+    assert first.status == "created"
+    assert store.get_setting(SETTING_SPREADSHEET_ID) == FAKE_SSID
+    calls_before = len(client.calls)
+
+    # `--spreadsheet-id` (or a reset) points the run at another document; the
+    # unchanged-content skip must not leave that target stale.
+    other_ssid = "SS_OTHER_999"
+    store.set_setting(SETTING_SPREADSHEET_ID, other_ssid)
+
+    second = _publish(store, client)
+
+    assert second.status == "updated"
+    assert second.spreadsheet_id == other_ssid
+    metadata_calls = [
+        call for call in client.calls[calls_before:] if call["args"][1:2] == ["metadata"]
+    ]
+    assert metadata_calls and metadata_calls[0]["args"][2] == other_ssid
+    assert store.get_setting(SETTING_SPREADSHEET_ID) == other_ssid
+
+
+def test_not_found_classifier_ignores_auth_and_non_404_errors() -> None:
+    store = FakeStore(stored_ssid=STORED_SSID)
+    client = FakeGogClient()
+    original_run = client.run
+    canned = [
+        # An auth failure whose text happens to mention 404 must not recreate.
+        GogOutcome(1, "", "PERMISSION_DENIED: 404 Not Found (credential expired)"),
+        # A structured non-404 error is authoritative even if its message says 404.
+        GogOutcome(
+            1,
+            json.dumps({"error": {"code": 500, "message": "404 upstream unavailable"}}),
+            "",
+        ),
+    ]
+
+    def run_with_canned_error(
+        args: list[str], *, force: bool = False, retries: int = 3
+    ) -> GogOutcome:
+        if args[1:2] == ["metadata"]:
+            return canned.pop(0)
+        return original_run(args, force=force, retries=retries)
+
+    client.run = run_with_canned_error  # type: ignore[method-assign]
+    for _ in range(2):
+        with pytest.raises(MarketIntelPublishError, match="Не вдалося перевірити"):
+            _publish(store, client)
+    assert "create" not in _commands(client)
+    assert store.get_setting(SETTING_SPREADSHEET_ID) == STORED_SSID
+
+
+def test_structured_json_not_found_allows_recreation() -> None:
+    store = FakeStore(stored_ssid=STORED_SSID)
+    client = FakeGogClient()
+    original_run = client.run
+
+    def run_with_json_not_found(
+        args: list[str], *, force: bool = False, retries: int = 3
+    ) -> GogOutcome:
+        if args[1:2] == ["metadata"]:
+            return GogOutcome(
+                1,
+                json.dumps(
+                    {
+                        "error": {
+                            "code": 404,
+                            "status": "NOT_FOUND",
+                            "message": "Requested entity was not found.",
+                        }
+                    }
+                ),
+                "",
+            )
+        return original_run(args, force=force, retries=retries)
+
+    client.run = run_with_json_not_found  # type: ignore[method-assign]
+    result = _publish(store, client)
+
+    assert result.status == "created"
+    assert store.get_setting(SETTING_SPREADSHEET_ID) == FAKE_SSID
+
+
 def test_gog_client_timeout_returns_error_outcome(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -608,7 +699,21 @@ def test_reset_sheet_deletes_and_recreates_tabs_with_force() -> None:
     assert all(call["force"] is True for call in delete_calls)
 
 
-def test_gog_unavailable_skips_without_any_calls() -> None:
+def test_gog_unavailable_skips_without_any_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    gog_client_module = importlib.import_module(
+        "market_intel.infrastructure.export.gog_client"
+    )
+    monkeypatch.setattr(
+        gog_client_module.shutil,
+        "which",
+        lambda name: "/usr/local/bin/gog" if name == "gog" else None,
+    )
+    assert gog_client_module.gog_available() is True
+    assert GogClient().gog_available() is True
+    monkeypatch.setattr(gog_client_module.shutil, "which", lambda name: None)
+    assert gog_client_module.gog_available() is False
+    assert GogClient().gog_available() is False
+
     store = FakeStore()
     client = FakeGogClient(available=False)
 
@@ -685,7 +790,9 @@ def _patch_gog_runtime(monkeypatch: pytest.MonkeyPatch, responses: list[tuple[in
     return ran_commands
 
 
-def test_gog_client_places_no_input_and_force_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_gog_client_command_building_and_retry_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("GOG_ACCOUNT", "me@example.com")
     ran = _patch_gog_runtime(monkeypatch, [(0, "{}")])
     client = GogClient(min_interval_seconds=0.0)
@@ -704,8 +811,8 @@ def test_gog_client_places_no_input_and_force_flags(monkeypatch: pytest.MonkeyPa
         "me@example.com",
     ]
 
-
-def test_gog_client_appends_force_flag_when_desctructive(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Destructive commands get the non-interactive confirmation flag.
+    monkeypatch.delenv("GOG_ACCOUNT")
     ran = _patch_gog_runtime(monkeypatch, [(0, "{}")])
     client = GogClient(min_interval_seconds=0.0)
 
@@ -713,10 +820,7 @@ def test_gog_client_appends_force_flag_when_desctructive(monkeypatch: pytest.Mon
 
     assert ran[0][-1] == "-y"
 
-
-def test_gog_client_retries_on_quota_and_gives_up_after_retries(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    # Quota errors are retried until success.
     ran = _patch_gog_runtime(
         monkeypatch,
         [
@@ -732,10 +836,7 @@ def test_gog_client_retries_on_quota_and_gives_up_after_retries(
     assert outcome.returncode == 0
     assert len(ran) == 3  # two quota failures then success
 
-
-def test_gog_client_returns_failure_without_retry_on_plain_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+    # Plain errors are not retried.
     ran = _patch_gog_runtime(monkeypatch, [(1, "PERMISSION_DENIED")])
     client = GogClient(min_interval_seconds=0.0)
 
@@ -744,15 +845,3 @@ def test_gog_client_returns_failure_without_retry_on_plain_error(
     assert outcome.returncode == 1
     assert "PERMISSION_DENIED" in outcome.stderr or "PERMISSION_DENIED" in outcome.stdout
     assert len(ran) == 1
-
-
-def test_gog_available_helper(monkeypatch: pytest.MonkeyPatch) -> None:
-    gog_client_module = importlib.import_module(
-        "market_intel.infrastructure.export.gog_client"
-    )
-    monkeypatch.setattr(gog_client_module.shutil, "which", lambda name: "/usr/local/bin/gog" if name == "gog" else None)
-    assert gog_client_module.gog_available() is True
-    assert GogClient().gog_available() is True
-    monkeypatch.setattr(gog_client_module.shutil, "which", lambda name: None)
-    assert gog_client_module.gog_available() is False
-    assert GogClient().gog_available() is False

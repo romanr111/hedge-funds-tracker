@@ -25,14 +25,22 @@ MISSING_VALUE_TOKENS: frozenset[str] = frozenset({"", "."})
 
 
 def parse_fred_csv(payload: str, *, series_id: str) -> list[tuple[date, float]]:
-    """Return (obs_date, value) tuples parsed from a fredgraph.csv payload."""
+    """Return (obs_date, value) tuples parsed from a fredgraph.csv payload.
+
+    A payload without the `observation_date` header is not a FRED CSV at all
+    (an error page or an interstitial), and a header-only payload carries no
+    data; both raise instead of returning [] so a fetch cannot register as a
+    success with zero observations.
+    """
     rows: list[tuple[date, float]] = []
+    header_seen = False
     reader = csv.reader(io.StringIO(payload))
     for row in reader:
         if len(row) < 2:
             continue
         if row[0].strip() == "observation_date":
             # Header row is authoritative; the value column must match the series id.
+            header_seen = True
             if series_id not in (cell.strip() for cell in row[1:]):
                 raise CollectorError(f"FRED CSV: unexpected header for series {series_id}.")
             continue
@@ -46,6 +54,12 @@ def parse_fred_csv(payload: str, *, series_id: str) -> list[tuple[date, float]]:
         except ValueError:
             continue
         rows.append((obs_date, value))
+    if not header_seen:
+        raise CollectorError(
+            f"FRED CSV: missing observation_date header for series {series_id}."
+        )
+    if not rows:
+        raise CollectorError(f"FRED CSV: no parsable observations for series {series_id}.")
     return rows
 
 

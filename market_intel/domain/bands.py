@@ -25,10 +25,12 @@ _T1, _T2, _T3, _T4, _T5 = "state1", "state2", "state3", "state4", "state5"
 class BandTable:
     """One value -> band lookup table.
 
-    direction: "ascending" (risk grows with value) or "descending" (risk grows
-    as value falls). Boundaries ascend in table order for both directions; a
-    descending table simply maps its FIRST band (lowest values) to the best
-    state.
+    ``direction`` documents risk orientation only: "ascending" (risk grows with
+    the value) or "descending" (risk grows as the value falls). It is metadata;
+    lookup does not read it. ``bands`` may be listed in ascending or descending
+    value order with adjacent half-open [lower, upper) intervals; a value
+    exactly on a boundary belongs to the interval that starts at that boundary
+    (the higher-valued side for descending tables too).
     """
 
     key: str
@@ -258,7 +260,7 @@ HY_OAS_BANDS: Final[BandTable] = BandTable(
     ),
 )
 
-# basis points; <=25 stable (boundary at 25 belongs to the lower band per contract)
+# basis points; a value of exactly 25 resolves to "Увага" ([lower, upper) rule)
 HY_CHANGE_6M_BANDS: Final[BandTable] = BandTable(
     key="hy_change_6m",
     direction="ascending",
@@ -306,13 +308,17 @@ COMPOSITE_VALUATION_BANDS: Final[BandTable] = BandTable(
     ),
 )
 
+# The composite sentiment score is a risk score built from inverted/percentile
+# inputs, so a LOW score means panic/fear, not calm (report sec. 4.2 ladder
+# Panic -> Fear -> Neutral -> Greed -> Euphoria). Colors keep the module's
+# action semantics: the panic tail is the historical deployment window.
 COMPOSITE_SENTIMENT_BANDS: Final[BandTable] = BandTable(
     key="composite_sentiment",
     direction="ascending",
     bands=(
-        _pt("composite_sentiment1", "Спокійно", _T1, None, 25.0),
-        _pt("composite_sentiment2", "Нейтрально", _T2, 25.0, 50.0),
-        _pt("composite_sentiment3", "Обережно", _T3, 50.0, 75.0),
+        _pt("composite_sentiment1", "Паніка", _T1, None, 25.0),
+        _pt("composite_sentiment2", "Страх", _T2, 25.0, 50.0),
+        _pt("composite_sentiment3", "Жадібність", _T3, 50.0, 75.0),
         _pt("composite_sentiment4", "Ейфорія", _T4, 75.0, None),
     ),
 )

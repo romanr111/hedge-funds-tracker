@@ -96,6 +96,8 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         weight=0.20,
         module_key="sentiment",
         invert=True,
+        # Sentiment inputs rank inside the design's 1-year window (report sec. 4.2).
+        percentile_window_days=365,
         params={"series_id": "VIXCLS", "source_label": "FRED VIXCLS"},
     ),
     "sofr": SeriesSpec(
@@ -247,6 +249,7 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         band_ref="fg",
         weight=0.25,
         module_key="sentiment",
+        percentile_window_days=365,
         params={
             "url": "https://production.dataviz.cnn.io/index/fearandgreed/graphdata",
             "source_label": "CNN Fear & Greed",
@@ -302,6 +305,10 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         band_ref="vix_vix3m",
         weight=0.10,
         module_key="sentiment",
+        # Ratio above 1 = near-term stress, so the raw percentile is risk when
+        # HIGH: invert like vix, or stress would feed the greed side.
+        invert=True,
+        percentile_window_days=365,
         params={"vix": "vix", "vix3m": "vix3m"},
     ),
     "margin_yoy": SeriesSpec(
@@ -313,6 +320,10 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         band_ref="margin_yoy",
         weight=0.25,
         module_key="sentiment",
+        # Monthly data cannot reach the 30-value percentile floor inside the
+        # design's 1-year window; 3 years (36 monthly prints) is the shortest
+        # window that keeps the member rankable.
+        percentile_window_days=1095,
         params={"margin_debt": "margin_debt"},
     ),
     "claims_yoy": SeriesSpec(
@@ -409,7 +420,11 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         title_uk="Індикатор Баффета (Z.1)",
         source="computed",
         freq="quarterly",
-        staleness_days=62,
+        # Z.1/GDP observations are dated at quarter START and Z.1 is released
+        # about two months after quarter end, so the freshest observation is
+        # already ~60-70 days old and the oldest in a cycle ~250 days old.
+        # A 62-day budget marked the anchor stale in every run.
+        staleness_days=260,
         band_ref="buffett_z1",
         weight=1.0,
         module_key="valuation",

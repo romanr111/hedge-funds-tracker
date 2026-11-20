@@ -1,17 +1,10 @@
-"""Dependency injection: builds MarketIntelRuntime (store, fetchers, publisher).
-
-The concrete vintage store and series gateways are owned by the parallel
-data agent; they are imported lazily inside `build_runtime` so this module
-stays importable in branch states where those adapters are not landed yet
-(offline tests inject fake fetchers and stores instead).
-"""
+"""Dependency injection: builds MarketIntelRuntime (store, fetchers, publisher)."""
 from __future__ import annotations
 
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
 
 from market_intel.application.ports.sheets_publisher import SheetsPublisher
 from market_intel.application.ports.series_fetcher import SeriesFetcher
@@ -20,16 +13,6 @@ from market_intel.config import MarketIntelConfig
 from market_intel.infrastructure.export.gog_sheets_publisher import (
     SETTING_SPREADSHEET_ID,
     GogSheetsPublisher,
-)
-
-FETCHER_SOURCE_KEYS: Final[tuple[str, ...]] = (
-    "fred",
-    "yahoo",
-    "multpl",
-    "finra",
-    "cnn_fg",
-    "factset",
-    "damodaran",
 )
 
 
@@ -48,7 +31,7 @@ def build_runtime(config: MarketIntelConfig, *, dry_run: bool) -> MarketIntelRun
     In dry-run mode the store points at a throwaway SQLite database so the
     real data file stays untouched, and the publisher is disabled entirely.
     """
-    # Agent A adapters (deferred import: they land via integration).
+    # Concrete adapters (imported here so tests can build fakes without them).
     from market_intel.infrastructure.storage.vintage_store import VintageStore
 
     if dry_run:
@@ -80,13 +63,8 @@ def build_runtime(config: MarketIntelConfig, *, dry_run: bool) -> MarketIntelRun
     return MarketIntelRuntime(store=store, fetchers=fetchers, publisher=publisher)
 
 
-def _build_fetchers(config) -> Mapping[str, SeriesFetcher]:
-    """Build one gateway per data source with its configured throttle interval.
-
-    Deferred imports: gateway modules are owned by the parallel data agent
-    (flat under market_intel/infrastructure/). If a module is missing, the
-    resulting ImportError names the adapter explicitly.
-    """
+def _build_fetchers(config: MarketIntelConfig) -> Mapping[str, SeriesFetcher]:
+    """Build one gateway per data source with its configured throttle interval."""
     from market_intel.infrastructure.fred_gateway import FredCsvGateway
     from market_intel.infrastructure.yahoo_gateway import YahooChartGateway
     from market_intel.infrastructure.multpl_gateway import MultplGateway

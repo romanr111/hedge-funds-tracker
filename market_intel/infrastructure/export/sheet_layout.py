@@ -119,7 +119,6 @@ _WRAP_FORMAT_JSON: Final[Mapping[str, object]] = {"wrapStrategy": "WRAP"}
 _WRAP_FORMAT_FIELDS: Final[str] = "userEnteredFormat.wrapStrategy"
 
 _CHART_MIN_ROWS: Final[int] = 2
-_MIN_CLEAR_ROWS: Final[int] = 300
 
 
 @dataclass(frozen=True)
