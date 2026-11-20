@@ -195,6 +195,13 @@ and bounds; clear env vars before asserting defaults).
   returns 403 behind Cloudflare; both gateways fail soft and the technique
   module shows "Недоступно". Re-probe and date-stamp updates; do not rewrite
   parsers against live pages while offline.
+- Known residual (deferred to phase 2): `damodaran` (annual ERP, a bare year
+  only) and the `multpl` current CAPE print are stamped with the run date, so an
+  unchanged value is inserted as a new vintage each run day. This adds tie mass
+  to the ERP percentile and hides a dead source from staleness. Fixing it needs
+  a design call on the ERP staleness and percentile window (`erp` relies on
+  daily rows to reach the 30-value minimum). FactSet is not affected: it
+  carries the report's publication date, bounded to a plausible range.
 - A single dead source does not fail the run; if no external source succeeds
   the run exits 2 and writes nothing. The system does not predict direction:
   it maps conditions to historical forward-return distributions with explicit

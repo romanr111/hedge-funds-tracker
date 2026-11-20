@@ -23,7 +23,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from urllib.parse import urljoin
 
 import requests
@@ -43,7 +43,13 @@ PDF_LINK_RE = re.compile(r"href=[\"']([^\"']+?\.pdf(?:\?[^\"']*)?)[\"']", flags=
 FORWARD_PE_LINE_RE = re.compile(r"forward[^\n]{0,120}?P/E ratio", flags=re.IGNORECASE)
 FORWARD_PE_VALUE_RE = re.compile(r"(?:is|was|of)\s+(\d{1,3}(?:\.\d+)?)")
 PDF_MAGIC = b"%PDF"
-_FILENAME_DATE_RE = re.compile(r"(\d{6})[A-Za-z]?\.pdf", flags=re.IGNORECASE)
+# Anchored to the "_MMDDYY[A].pdf" tail so the last six digits of a longer
+# digit run (e.g. "_11062026.pdf") are never read as a date.
+_FILENAME_DATE_RE = re.compile(r"_(\d{6})[A-Za-z]?\.pdf(?:[?#]|$)", flags=re.IGNORECASE)
+# A weekly report is never dated later than tomorrow (Kyiv runs ahead of the
+# US cover date) or more than about a year back.
+_MAX_FUTURE_DAYS = 1
+_MAX_AGE_DAYS = 400
 _FULL_DATE_RE = re.compile(
     r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+"
     r"([0-3]?\d),\s+(20\d{2})",
@@ -94,6 +100,17 @@ def date_from_pdf_filename(url: str) -> date | None:
         return date(2000 + int(digits[4:]), int(digits[:2]), int(digits[2:4]))
     except ValueError:
         return None
+
+
+def _plausible_report_date(candidate: date | None, today: date) -> date | None:
+    """Return the candidate only when it can be a current report's date."""
+    if candidate is None:
+        return None
+    if candidate > today + timedelta(days=_MAX_FUTURE_DAYS):
+        return None
+    if candidate < today - timedelta(days=_MAX_AGE_DAYS):
+        return None
+    return candidate
 
 
 def cover_date_from_pdf_text(pdf_text: str) -> date | None:
@@ -193,10 +210,11 @@ class FactsetGateway(HttpGatewayBase):
         url = require_param(spec, "url")
         pdf_bytes, resolved_url = self._resolve_pdf_bytes(url)
         forward_pe, text_date = _parse_pdf_bytes(pdf_bytes, spec_key=spec.key)
+        today = now_utc.astimezone(KYIV_TZ).date()
         obs_date = (
-            date_from_pdf_filename(resolved_url)
-            or text_date
-            or now_utc.astimezone(KYIV_TZ).date()
+            _plausible_report_date(date_from_pdf_filename(resolved_url), today)
+            or _plausible_report_date(text_date, today)
+            or today
         )
         observation = SeriesObservation(
             series_id=spec.key,

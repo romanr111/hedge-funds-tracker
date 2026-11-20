@@ -339,6 +339,7 @@ def test_finra_gateway_parses_margin_table_fixture() -> None:
         (date(2026, 9, 30), 1480000.0),
     ]
     assert observations[0].source == "finra"
+    assert {o.series_id for o in observations} == {"margin_debt"}
 
 
 def test_finra_gateway_fails_safe_on_unknown_layout() -> None:
@@ -360,6 +361,7 @@ def test_cnn_gateway_parses_latest_score_with_timestamp_date() -> None:
     assert len(observations) == 1
     assert observations[0].value == pytest.approx(22.0792756539235)
     assert observations[0].obs_date == date(2026, 11, 6)  # timestamp -> US date
+    assert observations[0].series_id == "fg"
     assert session.headers["User-Agent"].startswith("Mozilla/5.0")
 
     # An explicit fetched_on field wins; otherwise the US trading date of now_utc.
@@ -417,6 +419,7 @@ def test_factset_gateway_uses_direct_pdf_response_with_pdftotext(
     assert len(observations) == 1
     assert observations[0].value == 17.7
     assert observations[0].source == "factset"
+    assert observations[0].series_id == "forward_pe"
     # MMDDYY stamp in the resolved filename (EarningsInsight_110626A.pdf) wins
     # over the injected clock: a re-run of the same report dedupes cleanly.
     assert observations[0].obs_date == date(2026, 11, 6)
@@ -501,12 +504,71 @@ def test_factset_date_parsers_reject_invalid_and_historical_dates() -> None:
     assert factset_module.date_from_pdf_filename("https://x.test/report_241201.pdf") is None
     assert factset_module.date_from_pdf_filename("https://x.test/EarningsInsight.pdf") is None
     assert factset_module.date_from_pdf_filename("https://x.test/page") is None
+    # The stamp is anchored to the "_MMDDYY[A].pdf" tail: the last six digits of
+    # a longer run (here "062026") are not a date.
+    assert factset_module.date_from_pdf_filename("https://x.test/EarningsInsight_11062026.pdf") is None
+    assert factset_module.date_from_pdf_filename(
+        "https://x.test/EarningsInsight_110626A.pdf?v=2"
+    ) == date(2026, 11, 6)
     # The existing fixture cites "November 1, 2023" historically only: it is
     # outside both cover zones, so no text date is claimed.
     assert factset_module.cover_date_from_pdf_text(_fixture("factset_forward_pe.txt")) is None
     assert factset_module.cover_date_from_pdf_text(
         _fixture("factset_cover_date.txt")
     ) == date(2026, 11, 6)
+
+
+@pytest.mark.parametrize(
+    ("filename", "expected"),
+    [
+        # Valid calendar stamp but in the far future: not a current report.
+        ("EarningsInsight_123199A.pdf", date(2026, 11, 7)),
+        # More than a year old: not a current report.
+        ("EarningsInsight_010125A.pdf", date(2026, 11, 7)),
+        # Tomorrow in the report's US cover date is allowed (Kyiv runs ahead).
+        ("EarningsInsight_110826A.pdf", date(2026, 11, 8)),
+    ],
+)
+def test_factset_gateway_ignores_implausible_filename_dates(
+    monkeypatch: pytest.MonkeyPatch, filename: str, expected: date
+) -> None:
+    # Fixture text has neither a cover date nor a usable stamp, so the
+    # injected clock (Kyiv Nov 7) is the fallback for rejected stamps.
+    monkeypatch.setattr(
+        factset_module, "run_pdftotext", lambda *a, **k: _fixture("factset_forward_pe.txt")
+    )
+    session = _FakeSession([
+        _FakeResponse(
+            content=b"%PDF-1.7 fake",
+            headers={"Content-Type": "application/pdf"},
+            url=f"https://advantage.factset.com/{filename}",
+        )
+    ])
+    gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
+
+    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
+
+    assert observations[0].obs_date == expected
+
+
+def test_factset_gateway_falls_back_to_cover_date_when_filename_date_is_implausible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        factset_module, "run_pdftotext", lambda *a, **k: _fixture("factset_cover_date.txt")
+    )
+    session = _FakeSession([
+        _FakeResponse(
+            content=b"%PDF-1.7 fake",
+            headers={"Content-Type": "application/pdf"},
+            url="https://advantage.factset.com/EarningsInsight_123199A.pdf",
+        )
+    ])
+    gateway = FactsetGateway(session=session, min_interval_seconds=0.0)
+
+    observations = gateway.fetch(_spec("forward_pe"), now_utc=_utc(2026, 11, 7, 7))
+
+    assert observations[0].obs_date == date(2026, 11, 6)  # cover text, not 2099-12-31
 
 
 # --- Damodaran -------------------------------------------------------------
@@ -523,6 +585,7 @@ def test_damodaran_gateway_takes_latest_implied_erp_row() -> None:
     assert len(observations) == 1
     assert observations[0].value == pytest.approx(4.23)
     assert observations[0].source == "damodaran"
+    assert observations[0].series_id == "erp"
     assert observations[0].obs_date == date(2026, 11, 7)
 
     # Blank ERP cells are skipped; the latest non-blank row wins.
