@@ -217,7 +217,7 @@ Configuration is environment-driven. The app auto-loads `.env` from the repo roo
 - Storage tests create temporary SQLite databases via `tmp_path`.
 - When testing config, clear environment variables first using a helper like `_clear_config_env(monkeypatch)` to avoid leakage from the host or `.env` file.
 - Focused market_intel suite (offline): `python -m pytest tests/test_market_intel_*.py -q` - 17 files, 183 tests as of 2026-11-20.
-- Full repository suite as of the latest verified run (2026-11-20): 422 tests.
+- Full repository suite as of the latest verified run (2026-11-20): 428 tests.
 
 ## Architecture Decisions
 

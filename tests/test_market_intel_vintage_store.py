@@ -228,15 +228,20 @@ def test_store_wraps_runtime_sqlite_errors(store: VintageStore, monkeypatch: pyt
         def execute(self, *args: object, **kwargs: object) -> None:
             raise sqlite3.ProgrammingError("statement broken")
 
-    monkeypatch.setattr(store, "_conn", _BrokenConn())
     obs = _obs("hy_oas", date(2026, 11, 4), 3.32, _utc(2026, 11, 7, 7))
-    with pytest.raises(MarketIntelStorageError):
-        store.append_observation(obs)
-    with pytest.raises(MarketIntelStorageError):
-        store.read_history("hy_oas")
-    with pytest.raises(MarketIntelStorageError):
-        store.get_setting("any")
-    with pytest.raises(MarketIntelStorageError):
-        store.read_gauge_history()
-    with pytest.raises(MarketIntelStorageError):
-        store.last_publish_run()
+    # Scope the fake connection so the real one is restored before the store
+    # fixture tears down and closes it. The autouse conftest fixture makes
+    # monkeypatch tear down after the store fixture, so an unscoped patch here
+    # would leave the fake installed during close().
+    with monkeypatch.context() as patched:
+        patched.setattr(store, "_conn", _BrokenConn())
+        with pytest.raises(MarketIntelStorageError):
+            store.append_observation(obs)
+        with pytest.raises(MarketIntelStorageError):
+            store.read_history("hy_oas")
+        with pytest.raises(MarketIntelStorageError):
+            store.get_setting("any")
+        with pytest.raises(MarketIntelStorageError):
+            store.read_gauge_history()
+        with pytest.raises(MarketIntelStorageError):
+            store.last_publish_run()
