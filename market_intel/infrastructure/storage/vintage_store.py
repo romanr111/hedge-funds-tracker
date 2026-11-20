@@ -119,7 +119,6 @@ class VintageStore:
         return bool(inserted)
 
     def append_observations(self, observations: Sequence[SeriesObservation]) -> int:
-        fetched_at = _utc_now_iso()
         inserted_total = 0
         try:
             for obs in observations:
@@ -133,7 +132,7 @@ class VintageStore:
                         obs.obs_date.isoformat(),
                         float(obs.value),
                         obs.source,
-                        fetched_at,
+                        obs.fetched_at.isoformat(),
                     ),
                 )
                 inserted_total += self._conn.execute("SELECT changes()").fetchone()[0]
@@ -185,7 +184,7 @@ class VintageStore:
                 SELECT series_id, obs_date, value, source, fetched_at
                 FROM series_vintage
                 WHERE {' AND '.join(conditions)}
-                ORDER BY obs_date ASC
+                ORDER BY obs_date ASC, fetched_at ASC
                 """,
                 params,
             ).fetchall()

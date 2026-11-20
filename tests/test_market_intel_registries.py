@@ -59,7 +59,7 @@ COMPUTED_BANDED_KEYS = {
     "ecy", "vix_vix3m", "margin_yoy", "claims_yoy", "netliq_yoy", "sofr_iorb",
     "hy_change_6m", "pct_200dma", "drawdown_2y", "weekly_rsi", "buffett_z1",
 }
-INVERTED_KEYS = {"vix", "netliq_yoy", "erp"}
+INVERTED_KEYS = {"vix", "netliq_yoy", "erp", "curve_3m"}
 
 EXPECTED_MODULE_BY_KEY = {
     "hy_oas": "credit",
@@ -197,3 +197,8 @@ def test_registry_pins_compute_consume_keys() -> None:
     silently disabled one sentiment and one macro member)."""
     assert "margin_yoy" in SERIES_SPECS
     assert "netliq_tbn" in SERIES_SPECS
+
+
+def test_pct_200dma_title_matches_distance_metric() -> None:
+    # The series is SPX distance from its 200DMA, not market breadth.
+    assert SERIES_SPECS["pct_200dma"].title_uk == "S&P 500: відхилення від 200DMA"

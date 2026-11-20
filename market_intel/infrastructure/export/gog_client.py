@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MIN_INTERVAL_SECONDS: Final[float] = 0.3
 DEFAULT_RETRIES: Final[int] = 3
+DEFAULT_TIMEOUT_SECONDS: Final[float] = 120.0
 MAX_RETRY_SLEEP_SECONDS: Final[float] = 4.0
 
 # HTTP 429 / quota exhaustion markers that make a retry worthwhile.
@@ -63,9 +64,11 @@ class GogClient:
         *,
         min_interval_seconds: float = DEFAULT_MIN_INTERVAL_SECONDS,
         binary: str = "gog",
+        timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     ) -> None:
         self._binary = binary
         self._min_interval_seconds = min_interval_seconds
+        self._timeout_seconds = timeout_seconds
         self._last_invocation_monotonic: float | None = None
 
     def _throttle(self) -> None:
@@ -123,6 +126,17 @@ class GogClient:
                     text=True,
                     env=env,
                     check=False,
+                    timeout=self._timeout_seconds,
+                )
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    "gog invocation timed out",
+                    extra={"command": command, "timeout_seconds": self._timeout_seconds},
+                )
+                return GogOutcome(
+                    returncode=-1,
+                    stdout="",
+                    stderr=f"gog timed out after {self._timeout_seconds:g}s",
                 )
             except OSError as exc:
                 logger.error(

@@ -73,7 +73,7 @@ STATUS_SKIPPED_UNCHANGED: Final[str] = "skipped_unchanged"
 STATUS_SKIPPED_NO_GOG: Final[str] = "skipped_no_gog"
 
 _ACCEPTED_PUBLISH_STATUSES: Final[frozenset[str]] = frozenset(
-    {STATUS_CREATED, STATUS_UPDATED}
+    {STATUS_CREATED, STATUS_UPDATED, STATUS_SKIPPED_UNCHANGED}
 )
 
 SPREADSHEET_LINK_TEMPLATE: Final[str] = (
@@ -235,6 +235,14 @@ class GogSheetsPublisher:
             doc = _parse_json_dict(outcome)
             if doc is not None and doc.get("spreadsheetId"):
                 return str(doc["spreadsheetId"]), doc, False
+            if not _is_not_found_outcome(outcome):
+                # A transient metadata failure must never mint a duplicate
+                # spreadsheet. Only a terminal "not found" allows recreation.
+                raise MarketIntelPublishError(
+                    "Не вдалося перевірити збережений Spreadsheet: "
+                    f"rc={outcome.returncode}; "
+                    f"{(outcome.stderr or outcome.stdout).strip()}"
+                )
             logger.warning(
                 "Stored spreadsheet is not reachable; creating a new one",
                 extra={"spreadsheet_id": stored_id, "returncode": outcome.returncode},
@@ -544,7 +552,7 @@ class GogSheetsPublisher:
                             "sheetId": sheet_id,
                             "startColumnIndex": column,
                             "endColumnIndex": column + 1,
-                            "startRowIndex": 1,
+                            "startRowIndex": 0,
                             "endRowIndex": end_row,
                         }
                     ]
@@ -652,6 +660,20 @@ def _parse_json_dict(outcome: GogOutcome) -> dict[str, Any] | None:
     except (ValueError, TypeError):
         return None
     return parsed if isinstance(parsed, dict) else None
+
+
+_NOT_FOUND_MARKERS: Final[tuple[str, ...]] = (
+    "404",
+    "not found",
+    "does not exist",
+    "notfound",
+)
+
+
+def _is_not_found_outcome(outcome: GogOutcome) -> bool:
+    """True only for a terminal gog "spreadsheet does not exist" response."""
+    combined = f"{outcome.stderr or ''} {outcome.stdout or ''}".lower()
+    return any(marker in combined for marker in _NOT_FOUND_MARKERS)
 
 
 def _extract_spreadsheet_id(doc: Mapping[str, Any]) -> tuple[str | None, str]:

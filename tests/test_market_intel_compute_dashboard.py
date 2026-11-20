@@ -249,6 +249,22 @@ def test_indicator_key_percentiles_match_seeds() -> None:
     assert credit["sofr_iorb"].value == pytest.approx(4.0, rel=1e-9)
 
 
+def test_claims_yoy_anchors_to_latest_observation_not_run_date() -> None:
+    data = _seed_data()
+    last_obs = date(2026, 10, 15)  # 22 days before AS_OF
+    dates = [last_obs - timedelta(days=7 * i) for i in range(96)][::-1]
+    # All prints are 100 except the latest 200. The 28-day mean at last_obs
+    # spans five weekly prints (120); at AS_OF it would span only the 200
+    # print. Anchoring at AS_OF therefore reports +100% instead of +20%.
+    data["icsa"] = _daily("icsa", [100.0] * 95 + [200.0], dates)
+
+    claims = _by_key(_compute(data), "macro")["claims_yoy"]
+
+    assert claims.obs_date == last_obs
+    assert claims.value == pytest.approx(20.0)
+    assert claims.is_stale  # 22 days exceeds the 8-day weekly budget
+
+
 def test_indicators_ordered_by_module_then_key_diagnostics_excluded() -> None:
     snapshot = _compute(_seed_data())
     assert len(snapshot.indicators) == 34
@@ -402,6 +418,6 @@ def test_meanings_and_sources_populated_from_defaults() -> None:
     assert cape.source_uk == "test source"
     ecy = _by_key(snapshot, "valuation")["ecy"]
     assert ecy.source_uk == "розрахунок системи"
-    assert cape.unit_uk == "%"  # fallback unit map supplies plain units
+    assert cape.unit_uk == "×"  # CAPE is a multiple, not a percentage
     hy = _by_key(snapshot, "credit")["hy_oas"]
     assert hy.unit_uk == "%"

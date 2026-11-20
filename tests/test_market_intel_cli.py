@@ -299,6 +299,26 @@ def test_cli_skip_source_forwarded(
     assert recorded[0]["skip_sources"] == ("yahoo", "cnn_fg")
 
 
+def test_cli_unknown_skip_source_returns_two(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def fail_run(*args: object, **kwargs: object) -> RunResult:
+        pytest.fail("run_market_intel must not run for an unknown source")
+
+    _patch_cli(
+        monkeypatch,
+        tmp_path,
+        args=_args(skip_source=["bogus"]),
+        run_result=_run_result(),
+    )
+    monkeypatch.setattr(cli_main_module, "run_market_intel", fail_run)
+
+    exit_code = cli_main_module._main(logging.getLogger("test"))
+
+    assert exit_code == 2
+    assert "Невідоме джерело" in capsys.readouterr().out
+
+
 def test_cli_usage_conflict_returns_two(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

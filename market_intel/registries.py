@@ -61,6 +61,7 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
         band_ref="curve",
         weight=0.20,
         module_key="macro",
+        invert=True,
         params={"series_id": "T10Y3M", "source_label": "FRED T10Y3M"},
     ),
     "real_10y": SeriesSpec(
@@ -372,7 +373,7 @@ _SERIES_SPECS: dict[str, SeriesSpec] = {
     ),
     "pct_200dma": SeriesSpec(
         key="pct_200dma",
-        title_uk="Частка S&P 500 над 200DMA",
+        title_uk="S&P 500: відхилення від 200DMA",
         source="computed",
         freq="daily",
         staleness_days=3,

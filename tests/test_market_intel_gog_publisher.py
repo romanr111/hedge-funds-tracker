@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -55,11 +56,13 @@ class FakeGogClient:
         available: bool = True,
         fail_batch_update: bool = False,
         fail_metadata_for: frozenset[str] = frozenset(),
+        transient_metadata_for: frozenset[str] = frozenset(),
         existing_tabs: tuple[str, ...] = (),
     ) -> None:
         self.available = available
         self.fail_batch_update = fail_batch_update
         self.fail_metadata_for = fail_metadata_for
+        self.transient_metadata_for = transient_metadata_for
         self.calls: list[dict[str, Any]] = []
         self.batches: list[list[dict[str, Any]]] = []
         self.tabs: list[str] = list(existing_tabs)
@@ -97,6 +100,8 @@ class FakeGogClient:
             spreadsheet_id = args[2]
             if spreadsheet_id in self.fail_metadata_for:
                 return GogOutcome(1, "", "404 Not Found: requested entity was not found")
+            if spreadsheet_id in self.transient_metadata_for:
+                return GogOutcome(1, "", "connection reset by peer")
             doc = {
                 "spreadsheetId": spreadsheet_id,
                 "sheets": [
@@ -469,9 +474,14 @@ def test_chart_added_once_and_only_on_first_content() -> None:
     domain = spec["basicChart"]["domains"][0]
     sources = domain["domain"]["sourceRange"]["sources"]
     assert sources[0]["startColumnIndex"] == 0
+    # The range starts at the header row (0-based 0), so headerCount=1 names
+    # the real header instead of swallowing the first data point.
+    assert sources[0]["startRowIndex"] == 0
+    assert spec["basicChart"]["headerCount"] == 1
     for series_item in spec["basicChart"]["series"]:
         series_sources = series_item["series"]["sourceRange"]["sources"]
         assert series_sources[0]["startColumnIndex"] >= 1
+        assert series_sources[0]["startRowIndex"] == 0
 
     second = _publish(store, client)
     assert second.status == "skipped_unchanged"
@@ -508,6 +518,17 @@ def test_stale_ssid_falls_back_to_creation() -> None:
     assert store.get_setting(SETTING_SPREADSHEET_ID) == FAKE_SSID
 
 
+def test_transient_metadata_failure_never_creates_duplicate() -> None:
+    store = FakeStore(stored_ssid=STORED_SSID)
+    client = FakeGogClient(transient_metadata_for=frozenset({STORED_SSID}))
+
+    with pytest.raises(MarketIntelPublishError, match="Не вдалося перевірити"):
+        _publish(store, client)
+
+    assert "create" not in _commands(client)
+    assert store.get_setting(SETTING_SPREADSHEET_ID) == STORED_SSID
+
+
 def test_same_content_second_publish_is_skipped_without_gog_calls() -> None:
     store = FakeStore()
     client = FakeGogClient()
@@ -523,6 +544,35 @@ def test_same_content_second_publish_is_skipped_without_gog_calls() -> None:
     assert second.detail == "контент не змінився"
     assert len(client.calls) == call_count  # zero new gog invocations
     assert [run["status"] for run in store.publish_runs][-1] == "skipped_unchanged"
+
+    # A skip is itself an accepted terminal state: a third identical run must
+    # keep skipping instead of alternating back to a full rewrite.
+    third = _publish(store, client)
+
+    assert third.status == "skipped_unchanged"
+    assert len(client.calls) == call_count
+    assert [run["status"] for run in store.publish_runs][-1] == "skipped_unchanged"
+
+
+def test_gog_client_timeout_returns_error_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _timeout(*args: object, **kwargs: object) -> None:
+        # The configured per-instance timeout must reach subprocess.run;
+        # raising unconditionally would pass even if the kwarg were dropped.
+        assert kwargs.get("timeout") == 7.5
+        raise subprocess.TimeoutExpired(cmd="gog", timeout=7.5)
+
+    monkeypatch.setattr(
+        "market_intel.infrastructure.export.gog_client.subprocess.run", _timeout
+    )
+
+    outcome = GogClient(min_interval_seconds=0.0, timeout_seconds=7.5).run(
+        ["sheets", "metadata", FAKE_SSID, "-j"]
+    )
+
+    assert outcome.returncode == -1
+    assert "timed out" in outcome.stderr
 
 
 def test_changed_content_publishes_update() -> None:

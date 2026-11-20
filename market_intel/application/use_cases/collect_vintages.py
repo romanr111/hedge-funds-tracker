@@ -58,6 +58,7 @@ def collect_vintages(
             continue
         try:
             observations = list(fetcher.fetch(spec, now_utc=now_utc))
+            inserted = store.append_observations(observations)
         except CollectorError as exc:
             skipped.append(Skip(key=key, code=SKIP_SOURCE_ERROR, detail=str(exc)))
             logger.warning("collect_collector_error", extra={"series_key": key, "reason": str(exc)})
@@ -69,7 +70,6 @@ def collect_vintages(
             )
             logger.exception("collect_unexpected_error", extra={"series_key": key})
             continue
-        inserted = store.append_observations(observations)
         fetched.append(key)
         logger.info(
             "collect_fetched",

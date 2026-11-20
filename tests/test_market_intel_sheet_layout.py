@@ -272,6 +272,11 @@ def test_module_tab_gauge_header_carries_chip_and_score() -> None:
     # Chip cell fill and notes are attached.
     assert any(op.range == "'Оцінка вартості'!B1" and "backgroundColor" in op.format_json for op in valuation.format_ops)
     assert any("0-100" in note.note for note in valuation.note_ops)
+    score_format = next(
+        op for op in valuation.number_format_ops if op.range == "'Оцінка вартості'!C1"
+    )
+    assert score_format.type_ == "NUMBER"
+    assert score_format.pattern == "0.0"
 
 
 def test_history_tab_pivots_by_date() -> None:

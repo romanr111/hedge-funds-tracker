@@ -448,6 +448,14 @@ def _build_module_tab(snapshot: DashboardSnapshot, module_key: str) -> TabSpec:
         )
     )
     number_format_ops: list[NumberFormatOp] = []
+    if gauge is not None:
+        number_format_ops.append(
+            NumberFormatOp(
+                range=f"'{tab_name}'!C1",
+                type_="NUMBER",
+                pattern="0.0",
+            )
+        )
     if indicator_last_row >= indicator_first_row:
         number_format_ops.append(
             NumberFormatOp(

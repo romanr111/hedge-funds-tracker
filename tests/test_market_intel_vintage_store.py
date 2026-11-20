@@ -114,6 +114,20 @@ def test_read_history_orders_and_filters_by_dates(store: VintageStore) -> None:
     assert store.read_history("unknown") == []
 
 
+def test_read_history_tiebreaks_same_obs_date_by_fetched_at(
+    store: VintageStore,
+) -> None:
+    obs_date = date(2026, 2, 28)
+    store.append_observations(
+        [
+            _obs("cape", obs_date, 39.5, _utc(2026, 1, 3)),
+            _obs("cape", obs_date, 39.1, _utc(2026, 1, 2)),
+        ]
+    )
+
+    assert [o.value for o in store.read_history("cape")] == [39.1, 39.5]
+
+
 def test_gauge_history_upserts_per_run_date_and_module(store: VintageStore) -> None:
     first = GaugeHistoryPoint(
         run_date=date(2026, 11, 6),

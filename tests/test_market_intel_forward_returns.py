@@ -42,8 +42,10 @@ def test_verbatim_cells_from_the_research_report() -> None:
     assert cape.uncertainty_uk == "розкид -6,1..+8,3%/р."
     assert cape.citation_uk == "Asness-банди (через Swedroe); Vanguard R² 0,43"
     rsi_row = next(r for r in FORWARD_ROWS if r.rule_key == "weekly_rsi_below_30")
-    assert rsi_row.result_uk == "мед. +8,6%, 79% винів"
-    assert rsi_row.max_dd_uk == "12 міс. ~+24%, 90% позитивних"
+    assert rsi_row.result_uk == (
+        "1 міс.: мед. +8,6%, 79% винів; 12 міс.: ~+24%, 90% позитивних"
+    )
+    assert rsi_row.max_dd_uk == "-"
     assert rsi_row.n_uk == "n=46 тижнів/50 р."
     margin = next(r for r in FORWARD_ROWS if r.rule_key == "margin_peak_after_yoy_30")
     assert margin.uncertainty_uk == "2000-02 -49%; 2007-09 -57%; 2021-22 -25%"

@@ -563,6 +563,13 @@ class _FakeStore:
         return len(observations)
 
 
+class _BrokenStore(_FakeStore):
+    def append_observations(self, observations: Any) -> int:
+        if any(getattr(obs, "series_id", "") == "cape" for obs in observations):
+            raise RuntimeError("db locked")
+        return super().append_observations(observations)
+
+
 class _GoodFetcher:
     def fetch(self, spec: SeriesSpec, *, now_utc: datetime) -> list[SeriesObservation]:
         return [
@@ -667,3 +674,21 @@ def test_collect_vintages_records_unexpected_crashes_in_errors() -> None:
     assert skip.key == "cape"
     assert skip.code == SKIP_INTERNAL
     assert skip.detail == "помилка виконання зібрання (див. errors)"
+
+
+def test_collect_vintages_isolates_storage_errors() -> None:
+    store = _BrokenStore()
+    result = collect_vintages(
+        store,
+        {"multpl": _GoodFetcher(), "fred": _GoodFetcher()},
+        {"cape": SERIES_SPECS["cape"], "hy_oas": SERIES_SPECS["hy_oas"]},
+        skip_sources=(),
+        now_utc=_utc(2026, 11, 7, 7),
+    )
+    # The storage failure on cape must not stop hy_oas from being collected.
+    assert result.fetched == ("hy_oas",)
+    assert result.errors == ("cape: RuntimeError('db locked')",)
+    [skip] = result.skipped
+    assert skip.key == "cape"
+    assert skip.code == SKIP_INTERNAL
+    assert [o.series_id for o in store.appended] == ["hy_oas"]

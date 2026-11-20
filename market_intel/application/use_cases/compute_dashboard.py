@@ -127,7 +127,7 @@ _DEFAULT_MEANINGS_UK: Mapping[str, str] = {
 # Human units per rendered key (registry params have no 'unit' keys; keep the
 # map here so the module tab shows plain units for a non-professional reader).
 _UNITS_BY_KEY: Mapping[str, str] = {
-    "cape": "%",
+    "cape": "×",
     "ecy": "pp",
     "forward_pe": "×",
     "buffett_z1": "% ВВП",
@@ -267,8 +267,11 @@ def _derive_claims_yoy(icsa: list[tuple[date, float]] | None, as_of: date) -> tu
             return None
         return (t, (m_now / m_year - 1.0) * 100.0)
 
-    hist_points = [p for anchor in icsa if (p := _yoy_at(anchor[0])) is not None]
-    current = _yoy_at(as_of)
+    latest = calc.latest_at_or_before(icsa, as_of)
+    if latest is None:
+        return None
+    hist_points = [p for point in icsa if (p := _yoy_at(point[0])) is not None]
+    current = _yoy_at(latest[0])
     if current is None or not hist_points:
         return None
     return hist_points, current

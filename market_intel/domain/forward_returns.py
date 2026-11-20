@@ -117,10 +117,10 @@ FORWARD_ROWS: tuple[ForwardReturnRow, ...] = (
     ForwardReturnRow(
         rule_key="weekly_rsi_below_30",
         condition_uk="Тижневий RSI(14) <30",
-        horizon_uk="1 міс.",
-        result_uk="мед. +8,6%, 79% винів",
+        horizon_uk="1 міс., 12 міс.",
+        result_uk="1 міс.: мед. +8,6%, 79% винів; 12 міс.: ~+24%, 90% позитивних",
         uncertainty_uk="лип.2020 -20,6%",
-        max_dd_uk="12 міс. ~+24%, 90% позитивних",
+        max_dd_uk=_HYPHEN,
         n_uk="n=46 тижнів/50 р.",
         evidence_level="ESTABLISHED",
         citation_uk="InvestorPlace 2022; SteadyTape",

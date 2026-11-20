@@ -26,6 +26,11 @@ from market_intel.infrastructure.export.gog_sheets_publisher import (
     STATUS_SKIPPED_NO_GOG,
     STATUS_SKIPPED_UNCHANGED,
 )
+from market_intel.registries import SERIES_SPECS
+
+_KNOWN_SOURCES: Final[frozenset[str]] = frozenset(
+    spec.source for spec in SERIES_SPECS.values()
+)
 
 DEGRADED_PUBLISH_STATUSES: Final[frozenset[str]] = frozenset(
     {STATUS_SKIPPED_NO_GOG, STATUS_SKIPPED_UNCHANGED}
@@ -70,6 +75,14 @@ def _main(logger: logging.Logger) -> int:
         print(
             "Конфлікт прапорців: --dry-run уже вимикає публікацію; "
             "--no-publish разом із ним не використовується."
+        )
+        return 2
+
+    unknown_sources = sorted(set(args.skip_source) - _KNOWN_SOURCES)
+    if unknown_sources:
+        print(
+            "Невідоме джерело для --skip-source: "
+            f"{', '.join(unknown_sources)}. Доступні: {', '.join(sorted(_KNOWN_SOURCES))}."
         )
         return 2
 
@@ -124,7 +137,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--db",
         default=None,
-        help="Шлях до SQLite-бази (перевизначає DB_PATH).",
+        help="Шлях до SQLite-бази (перевизначає MARKET_INTEL_DB_PATH).",
     )
     parser.add_argument(
         "--spreadsheet-id",

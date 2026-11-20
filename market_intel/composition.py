@@ -66,10 +66,15 @@ def build_runtime(config: MarketIntelConfig, *, dry_run: bool) -> MarketIntelRun
             folder_id=config.sheets_folder_id or None,
         )
 
-    # Seed the spreadsheet id from the environment config when provided so
-    # the publisher resolves the same document across invocations; the store
-    # setting remains the single source of truth afterwards.
-    if config.sheets_spreadsheet_id and not dry_run:
+    # Seed the spreadsheet id from the environment config only when the store
+    # has no persisted id. Afterwards the store setting is the single source of
+    # truth: re-seeding on every run would overwrite a replacement id created
+    # after a pinned sheet disappeared, minting a new orphan sheet each run.
+    if (
+        config.sheets_spreadsheet_id
+        and not dry_run
+        and not store.get_setting(SETTING_SPREADSHEET_ID)
+    ):
         store.set_setting(SETTING_SPREADSHEET_ID, config.sheets_spreadsheet_id)
 
     return MarketIntelRuntime(store=store, fetchers=fetchers, publisher=publisher)
